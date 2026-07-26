@@ -258,6 +258,17 @@ pub fn download_text_file(filename: &str, mime: &str, content: &str) {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download_text_file(_filename: &str, _mime: &str, _content: &str) {}
 
+/// 把一段文本写进系统剪贴板——纯浏览器 API，不经服务端。写入失败（无权限/非安全上下文）
+/// 时静默返回：复制不是关键路径，不该为它弹错误。
+#[cfg(target_arch = "wasm32")]
+pub fn copy_text(text: &str) {
+    let clipboard = leptos::window().navigator().clipboard();
+    let _ = clipboard.write_text(text);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn copy_text(_text: &str) {}
+
 /// 找到下一帧结尾（`\n\n`），返回其后一个字节的偏移，供 `drain` 一次取走整帧（含分隔符）。
 #[cfg(target_arch = "wasm32")]
 fn find_frame_end(buf: &[u8]) -> Option<usize> {

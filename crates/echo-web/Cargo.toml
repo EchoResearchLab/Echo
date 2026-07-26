@@ -35,6 +35,13 @@ web-sys = { version = "0.3", features = [
     "BlobPropertyBag",
     "Url",
     "HtmlAnchorElement",
+    # 答案复制（navigator.clipboard）与编辑器自增高（textarea.style / scrollHeight）。
+    "Navigator",
+    "Clipboard",
+    "Element",
+    "HtmlElement",
+    "HtmlTextAreaElement",
+    "CssStyleDeclaration",
 ] }
 
 [package.metadata.echo]
