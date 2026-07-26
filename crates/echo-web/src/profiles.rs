@@ -5,6 +5,9 @@
 //! （pending 能力），本页不实现。
 
 use crate::api;
+use crate::dialog::confirm_destructive;
+use crate::format;
+use crate::icons::Icon;
 use echo_contracts::{
     CompanyProfileDetail, CompanyProfileResponse, CompanyProfileUpsertRequest,
     CompanyProfilesListResponse, Decimal, MutationResponse,
@@ -61,20 +64,6 @@ fn decimal_text(value: Option<Decimal>) -> String {
     value
         .map(|value| value.normalize().to_string())
         .unwrap_or_else(|| "—".to_string())
-}
-
-fn confirm_profile_delete(ticker: &str) -> bool {
-    #[cfg(target_arch = "wasm32")]
-    {
-        leptos::window()
-            .confirm_with_message(&format!("确定删除 {ticker} 的研究档案吗？删除后无法恢复。"))
-            .unwrap_or(false)
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = ticker;
-        true
-    }
 }
 
 #[component]
@@ -243,7 +232,7 @@ pub fn ProfilesSection() -> impl IntoView {
                                         <span class="session-item-meta">
                                             {item.research_status.clone().unwrap_or_else(|| "未标注".to_string())}
                                             " · 置信 " {item.confidence.clone().unwrap_or_else(|| "—".to_string())}
-                                            " · " {item.turn_count} " 轮 · " {item.updated_at.clone()}
+                                            " · " {item.turn_count} " 轮 · " {format::timestamp(&item.updated_at)}
                                         </span>
                                     </button>
                                 }
@@ -375,11 +364,17 @@ pub fn ProfilesSection() -> impl IntoView {
                                         class="danger-link"
                                         on:click=move |_| {
                                             let ticker = form_ticker.get_untracked();
-                                            if !ticker.is_empty() && confirm_profile_delete(&ticker) {
-                                                delete.dispatch(ticker);
+                                            if ticker.is_empty() {
+                                                return;
                                             }
+                                            confirm_destructive(
+                                                "删除研究档案",
+                                                format!("{ticker} 的论点、多空框架、跟踪与证伪条件将一并删除，无法恢复。"),
+                                                "删除档案",
+                                                Callback::new(move |_| delete.dispatch(ticker.clone())),
+                                            );
                                         }
-                                    >"删除档案"</button>
+                                    ><Icon name="trash" />"删除档案"</button>
                                 </div>
                             </div>
                         }.into_view()
