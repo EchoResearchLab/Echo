@@ -1,0 +1,405 @@
+/* ============================================================================
+   Echo Research · 应用外壳
+   一条顶栏承载品牌 / 主导航 / 通知 / 账户；下面是唯一的内容舞台。
+   页面各自决定内部列结构，外壳不再预留任何空列。
+   ========================================================================= */
+
+.app-shell {
+  display: grid;
+  /* 显式钉住列宽：隐式列会按 max-content 撑开，让内部宽内容把整个外壳顶出视口，
+     在窄屏上表现为一条横向滚动条。 */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr);
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--paper-canvas);
+}
+
+/* ── 顶栏 ───────────────────────────────────────────────────────────── */
+.echo-topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  padding: 0 var(--gutter);
+  border-bottom: 1px solid var(--line-1);
+  background: var(--glass);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+/* ── 品牌 ───────────────────────────────────────────────────────────── */
+.topbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: none;
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) 0;
+  border-radius: var(--r-sm);
+  transition: opacity var(--dur-1) linear;
+}
+
+.topbar-brand:hover {
+  opacity: 0.7;
+}
+
+.echo-brand-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+}
+
+.echo-mark-svg {
+  width: 100%;
+  height: 100%;
+}
+
+.echo-brand-copy {
+  display: grid;
+  gap: 1px;
+  text-align: left;
+}
+
+.echo-brand-name {
+  color: var(--ink-1);
+  font-size: var(--fs-14);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  line-height: 1;
+}
+
+.echo-brand-sub {
+  color: var(--ink-4);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  line-height: 1;
+}
+
+/* ── 主导航：文字 + 底部指示线，与内容轴左对齐 ─────────────────────── */
+.workspace-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  height: 100%;
+  margin-left: var(--sp-5);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.workspace-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.nav-item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 var(--sp-4);
+  color: var(--ink-3);
+  font-size: var(--fs-14);
+  font-weight: 550;
+  white-space: nowrap;
+  transition: color var(--dur-1) linear;
+}
+
+.nav-item::after {
+  position: absolute;
+  right: var(--sp-4);
+  bottom: 0;
+  left: var(--sp-4);
+  height: 2px;
+  content: "";
+  border-radius: 2px 2px 0 0;
+  background: var(--brand);
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.nav-item:hover {
+  color: var(--ink-1);
+}
+
+.nav-item:hover::after {
+  background: var(--line-3);
+  transform: scaleX(0.5);
+}
+
+.nav-item.is-active {
+  color: var(--ink-1);
+  font-weight: 600;
+}
+
+.nav-item.is-active::after,
+.nav-item.is-active:hover::after {
+  background: var(--brand);
+  transform: scaleX(1);
+}
+
+/* ── 顶栏右侧 ───────────────────────────────────────────────────────── */
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+/* ── 通知 ───────────────────────────────────────────────────────────── */
+.notification-center {
+  position: relative;
+}
+
+.notification-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--ctl-md);
+  height: var(--ctl-md);
+  color: var(--ink-3);
+  border-radius: var(--r-sm);
+  transition: color var(--dur-1) linear, background-color var(--dur-1) linear;
+}
+
+.notification-button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.notification-button:hover {
+  color: var(--ink-1);
+  background: var(--paper-sunken);
+}
+
+.notification-button > span {
+  position: absolute;
+  top: 4px;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  color: var(--ink-on-brand);
+  font-size: 10px;
+  font-weight: 700;
+  border: 2px solid var(--paper-raised);
+  border-radius: var(--r-full);
+  background: var(--danger);
+}
+
+.notification-popover,
+.account-menu {
+  position: absolute;
+  top: calc(100% + var(--sp-2));
+  right: 0;
+  z-index: 60;
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--paper-raised);
+  box-shadow: var(--e-pop);
+  animation: popoverIn var(--dur-2) var(--ease-out) both;
+}
+
+@keyframes popoverIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+}
+
+.notification-popover {
+  width: min(360px, calc(100vw - 2 * var(--gutter)));
+  max-height: 60vh;
+  padding: var(--sp-2) var(--sp-5) var(--sp-4);
+  overflow-y: auto;
+}
+
+.popover-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-4) 0 var(--sp-3);
+  border-bottom: 1px solid var(--line-1);
+  background: var(--paper-raised);
+}
+
+.popover-head strong {
+  font-size: var(--fs-15);
+}
+
+.popover-head button {
+  color: var(--brand-ink);
+  font-size: var(--fs-13);
+  font-weight: 550;
+}
+
+.popover-head button:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.notification-popover .page-state {
+  margin-top: var(--sp-4);
+}
+
+/* ── 账户 ───────────────────────────────────────────────────────────── */
+.rail-account {
+  position: relative;
+}
+
+.account-card {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--ctl-md);
+  padding: 0 var(--sp-2) 0 var(--sp-1);
+  border-radius: var(--r-full);
+  transition: background-color var(--dur-1) linear;
+}
+
+.account-card:hover,
+.account-card.is-open {
+  background: var(--paper-sunken);
+}
+
+.user-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  color: var(--brand-800);
+  font-size: var(--fs-12);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border-radius: var(--r-full);
+  background: var(--brand-100);
+}
+
+.account-copy {
+  display: grid;
+  gap: 1px;
+  text-align: left;
+}
+
+.account-copy strong {
+  max-width: 15ch;
+  overflow: hidden;
+  color: var(--ink-1);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-copy small {
+  color: var(--ink-4);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: var(--tracking-kicker);
+  line-height: 1.2;
+}
+
+.account-chevron {
+  color: var(--ink-4);
+  font-size: var(--fs-12);
+  line-height: 0.6;
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.account-card.is-open .account-chevron {
+  transform: rotate(180deg);
+}
+
+.account-menu {
+  display: grid;
+  min-width: 200px;
+  padding: var(--sp-2);
+}
+
+.account-menu button {
+  padding: var(--sp-3) var(--sp-3);
+  color: var(--ink-2);
+  font-size: var(--fs-14);
+  text-align: left;
+  border-radius: var(--r-xs);
+  transition: color var(--dur-1) linear, background-color var(--dur-1) linear;
+}
+
+.account-menu button:hover {
+  color: var(--ink-1);
+  background: var(--paper-sunken);
+}
+
+.account-menu button.is-danger {
+  color: var(--danger-ink);
+}
+
+.account-menu button.is-danger:hover {
+  background: var(--danger-tint);
+}
+
+/* 菜单/浮层的点击外部关闭遮罩：透明、铺满、位于浮层之下。 */
+.dismiss-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+
+/* ── 内容舞台 ───────────────────────────────────────────────────────── */
+.workspace-stage {
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* 页面切换的纸面淡入：只动透明度与 2px 位移，不改变布局尺寸。 */
+.workspace-stage > * {
+  animation: stageIn var(--dur-4) var(--ease-out) both;
+}
+
+@keyframes stageIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.page-content {
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--sp-8) var(--gutter) var(--sp-11);
+}
+
+.page-header {
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--sp-9) var(--gutter) 0;
+}
+
+.page-header h1 {
+  margin-top: var(--sp-2);
+  font-family: var(--font-serif);
+  font-size: var(--fs-30);
+  font-weight: 500;
+}
+
+.page-header > p:last-child {
+  max-width: 60ch;
+  margin-top: var(--sp-3);
+  color: var(--ink-3);
+  font-size: var(--fs-15);
+}
+
+.page-header + .page-content {
+  padding-top: var(--sp-7);
+}

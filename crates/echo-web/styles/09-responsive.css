@@ -1,0 +1,347 @@
+/* ============================================================================
+   Echo Research · 响应式
+   断点：1180（中等桌面）· 900（平板 / 单栏）· 640（手机）
+   原则：不隐藏功能，只重排。触控目标不小于 44px。
+   ========================================================================= */
+
+/* ── ≤1180：收窄侧栏与栅格 ─────────────────────────────────────────── */
+@media (max-width: 1180px) {
+  :root {
+    --rail-w: 240px;
+  }
+
+  .settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profiles-layout {
+    grid-template-columns: 224px minmax(0, 1fr);
+  }
+
+  .watch-form-grid {
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  }
+}
+
+/* ── ≤900：登录并单栏；研究历史转为抽屉式顶部条 ────────────────────── */
+@media (max-width: 900px) {
+  .auth-page {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-8);
+    align-content: start;
+    padding: var(--sp-8) var(--gutter) var(--sp-9);
+  }
+
+  /* 单栏时表单排在前面：回访用户占绝大多数，不该先滚过一屏品牌叙事才能登录。 */
+  .auth-card {
+    order: 1;
+  }
+
+  .auth-story {
+    order: 2;
+    max-width: 560px;
+    margin-left: 0;
+  }
+
+  .auth-story h1 {
+    font-size: clamp(30px, 8vw, 42px);
+  }
+
+  .auth-echo-art {
+    left: auto;
+    right: -28%;
+    width: min(520px, 92vw);
+    opacity: 0.1;
+  }
+
+  .auth-card {
+    max-width: 440px;
+    padding: var(--sp-7) var(--sp-6);
+  }
+
+  .profiles-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profiles-list {
+    max-height: 232px;
+    overflow-y: auto;
+  }
+
+  /* 数据表格改为卡片式：表头隐藏，每格用 data-label 自带标题。 */
+  .data-table,
+  .portfolio-table {
+    border: 0;
+    gap: var(--sp-3);
+  }
+
+  .data-table > div,
+  .portfolio-table > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-2);
+    padding: var(--sp-4);
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-md);
+    background: var(--paper-raised);
+  }
+
+  .data-table-head,
+  .portfolio-table .table-head {
+    display: none !important;
+  }
+
+  .data-table > div > span[data-label],
+  .portfolio-table > div > span[data-label] {
+    display: grid;
+    grid-template-columns: 92px minmax(0, 1fr);
+    gap: var(--sp-3);
+    align-items: baseline;
+  }
+
+  .data-table > div > span[data-label]::before,
+  .portfolio-table > div > span[data-label]::before {
+    content: attr(data-label);
+    color: var(--ink-4);
+    font-size: var(--fs-11);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+
+  .watch-company,
+  .watch-tags,
+  .watch-actions,
+  .rules-actions {
+    justify-content: flex-start;
+  }
+
+  .company-showcase-heading {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-2);
+  }
+
+  .company-showcase-heading p {
+    text-align: left;
+  }
+}
+
+/* ── ≤760：顶栏与研究台重排 ───────────────────────────────────────── */
+@media (max-width: 760px) {
+  :root {
+    --topbar-h: 52px;
+  }
+
+  /* 顶栏在 375px 上要同时装下品牌、三个 tab、通知和账户——收紧一切间距，
+     不让任何一个 tab 被裁掉一半。 */
+  .echo-topbar {
+    gap: var(--sp-3);
+    padding-inline: var(--sp-4);
+  }
+
+  .echo-brand-copy {
+    display: none;
+  }
+
+  .workspace-nav {
+    margin-left: 0;
+  }
+
+  .nav-item {
+    padding: 0 var(--sp-3);
+  }
+
+  .nav-item::after {
+    right: var(--sp-3);
+    left: var(--sp-3);
+  }
+
+  .account-copy {
+    display: none;
+  }
+
+  .account-chevron {
+    display: none;
+  }
+
+  /* 研究历史在窄屏折叠为一条 52px 图标栏，用户仍能新建与展开；
+     选择器要压过 06-research.css 里那条 `:has()` 规则的特异性。 */
+  .research-shell:has(.research-sidebar),
+  .research-shell:has(.research-sidebar.is-collapsed) {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+
+  .research-sidebar {
+    padding: var(--sp-3) var(--sp-1);
+  }
+
+  .research-sidebar .sidebar-new,
+  .research-sidebar .sidebar-toggle {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    justify-self: center;
+  }
+
+  .research-sidebar .sidebar-new b,
+  .research-sidebar .sidebar-section-title,
+  .research-sidebar .research-sidebar-list {
+    display: none;
+  }
+
+  .research-sidebar-head {
+    flex-direction: column;
+    gap: var(--sp-2);
+  }
+
+  .research-sidebar .sidebar-new {
+    width: 100%;
+    flex: none;
+    padding: 0;
+  }
+
+  /* 窄屏展开态改为覆盖式抽屉，避免把研究台挤成一条缝。 */
+  .research-sidebar:not(.is-collapsed) {
+    position: fixed;
+    top: var(--topbar-h);
+    bottom: 0;
+    left: 0;
+    z-index: 45;
+    width: min(300px, 84vw);
+    padding: var(--sp-4);
+    background: var(--paper-raised);
+    box-shadow: var(--e-pop);
+  }
+
+  .research-sidebar:not(.is-collapsed) .sidebar-new b {
+    display: block;
+  }
+
+  .research-sidebar:not(.is-collapsed) .sidebar-section-title {
+    display: flex;
+  }
+
+  .research-sidebar:not(.is-collapsed) .research-sidebar-list {
+    display: grid;
+  }
+
+  .research-sidebar:not(.is-collapsed) .research-sidebar-head {
+    flex-direction: row;
+  }
+
+  .research-sidebar:not(.is-collapsed) .sidebar-new {
+    width: auto;
+    flex: 1;
+    padding: 0 var(--sp-4);
+  }
+
+  /* 编辑器里研究对象独占一行——和「深度报告 / 发送」抢同一行会被压成三个字。 */
+  .composer-footer {
+    flex-wrap: wrap;
+  }
+
+  .company-picker {
+    flex: 1 1 100%;
+    max-width: none;
+    margin-right: 0;
+  }
+
+  .composer-report {
+    margin-left: auto;
+  }
+
+  /* 窄屏只留信任标记：上下文文案与 hero 标题重复，先让位给内容。 */
+  .desk-toolbar {
+    justify-content: flex-end;
+  }
+
+  .desk-context {
+    display: none;
+  }
+
+  .message.user .bubble {
+    max-width: 94%;
+  }
+
+  .composer-meta > span:first-child {
+    display: none;
+  }
+
+  .val-bands {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .company-showcase {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .research-intents {
+    /* 横向滑动而不是换行成四五行，首屏不被快捷入口吃掉。 */
+    flex-wrap: nowrap;
+    margin-inline: calc(-1 * var(--gutter));
+    padding-inline: var(--gutter);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .research-intents::-webkit-scrollbar {
+    display: none;
+  }
+
+  .research-intents button {
+    flex: none;
+  }
+
+  .time-range {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .time-range-divider {
+    display: none;
+  }
+
+  .segmented {
+    display: grid;
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    justify-self: stretch;
+  }
+
+  .segmented-indicator {
+    display: none;
+  }
+
+  .segmented-item.is-active {
+    background: var(--paper-raised);
+    box-shadow: var(--e-1);
+  }
+
+  .profile-actions,
+  .settings-overview {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .page-header h1 {
+    font-size: var(--fs-25);
+  }
+}
+
+/* ── 触控设备：动作按钮常显，命中区域放大 ─────────────────────────── */
+@media (hover: none) {
+  .session-item-delete {
+    opacity: 1;
+  }
+
+  .watch-star,
+  .watch-more,
+  .session-item-delete,
+  .company-chip-clear {
+    min-width: var(--tap-min);
+    min-height: var(--tap-min);
+  }
+
+  .company-chip {
+    height: auto;
+    min-height: var(--tap-min);
+  }
+}

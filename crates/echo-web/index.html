@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#f2f7f7" />
+    <meta name="theme-color" content="#f7f8f5" />
     <meta name="description" content="Echo Research — evidence-first intelligence for public-market research." />
     <meta property="og:title" content="Echo Research · 让证据发声" />
     <meta property="og:description" content="面向公开市场的证据优先研究工作台。" />
@@ -15,7 +15,18 @@
     <meta name="twitter:image" content="/og.png" />
     <title>Echo Research · 让证据发声</title>
     <link data-trunk rel="rust" data-wasm-opt="z" />
-    <link data-trunk rel="css" href="style.css" />
+    <!-- 样式按层级加载：令牌 → 基础 → 组件 → 外壳 → 页面 → 响应式。
+         同一属性只在唯一一层定义；不允许再往后叠覆盖层。 -->
+    <link data-trunk rel="css" href="styles/01-tokens.css" />
+    <link data-trunk rel="css" href="styles/02-base.css" />
+    <link data-trunk rel="css" href="styles/03-primitives.css" />
+    <link data-trunk rel="css" href="styles/04-shell.css" />
+    <link data-trunk rel="css" href="styles/05-auth.css" />
+    <link data-trunk rel="css" href="styles/06-research.css" />
+    <link data-trunk rel="css" href="styles/07-library.css" />
+    <link data-trunk rel="css" href="styles/08-settings.css" />
+    <link data-trunk rel="css" href="styles/10-dialog.css" />
+    <link data-trunk rel="css" href="styles/09-responsive.css" />
     <link data-trunk rel="copy-file" href="assets/og.png" />
   </head>
   <body></body>
