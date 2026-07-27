@@ -18,6 +18,8 @@ pub mod from_db;
 pub mod model_gateway;
 pub mod report;
 pub mod research;
+pub mod research_memory;
+pub mod research_orchestrator;
 pub mod watch_rules;
 
 pub use answer_prompt::{AnswerContext, build_system_prompt, build_user_prompt};
@@ -33,8 +35,14 @@ pub use model_gateway::{
 };
 pub use report::{ReportOutcome, ReportService};
 pub use research::{
-    CompareResearchFacts, LoadedFundamentals, PersistResearchSession, PriorTurn, ResearchFacts,
-    ResearchOutcome, ResearchPorts, ResearchService,
+    CompareResearchFacts, FactRecovery, FactRecoveryRequest, LoadedFundamentals,
+    PersistResearchSession, PriorTurn, ResearchFacts, ResearchOutcome, ResearchPorts,
+    ResearchService,
+};
+pub use research_memory::{CompanyMemory, CompanyMemoryUpdate};
+pub use research_orchestrator::{
+    DEFAULT_MAX_RECOVERY_ROUNDS, RecoveryRound, RecoveryTrace, ResearchDegradation, ResearchGap,
+    ResearchLoopConfig, ResearchOrchestrator, evaluate_gaps,
 };
 pub use watch_rules::{WatchRuleError, WatchRuleService};
 

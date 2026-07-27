@@ -25,38 +25,41 @@ use echo_application::model_gateway::{
     model_answer, model_answer_stream,
 };
 use echo_application::{
-    AuthError, AuthService, CompanyResolvePorts, CompanyResolveService, DbCompanyHit,
-    ExternalSymbolHit, LoadedFundamentals, PersistResearchSession, PriorTurn, ReportService,
+    AuthError, AuthService, CompanyMemory, CompanyMemoryUpdate, CompanyResolvePorts,
+    CompanyResolveService, DbCompanyHit, ExternalSymbolHit, FactRecovery, FactRecoveryRequest,
+    LoadedFundamentals, PersistResearchSession, PriorTurn, ReportService, ResearchGap,
     ResearchPorts, ResearchService, ResolvedCompany, WatchRuleError, WatchRuleService,
     market_snapshot_from_rows, resolved_company_from_rows,
 };
 use echo_config::ApiConfig;
 use echo_contracts::{
-    AskRequest, AskResponse, AuthInviteRequest, AuthInviteResponse, AuthLoginRequest,
-    AuthLogoutResponse, AuthMeResponse, AuthRegisterRequest, AuthUserResponse,
-    ChangedCountResponse, CompanyProfileDetail, CompanyProfileResponse, CompanyProfileSummary,
-    CompanyProfileUpsertRequest, CompanyProfilesListResponse, CompanyResolveItem,
-    CompanyResolveQuery, CompanyResolveResponse, CompanySearchItem, CompanySearchQuery,
-    CompanySearchResponse, CompanyVerifyQuery, CompanyVerifyResponse, CompanyVerifySuggestion,
-    CompareRequest, CompareResponse, DeskResponse, DeskTicker, ErrorResponse, HealthResponse,
-    ListQuery, MutationResponse, Notification, NotificationReadRequest, NotificationsListResponse,
-    PortfolioListResponse, PortfolioPosition, PortfolioUpsertRequest, PreferencesResponse,
-    PreferencesUpdateRequest, PublicUser, ReportGenerateResponse, ResearchSessionDetail,
-    ResearchSessionResponse, ResearchSessionSummary, ResearchSessionsResponse, ResearchStreamEvent,
-    TickerQuery, UnreadResponse, UserPreferences, UserRole, WatchEntry, WatchListResponse,
-    WatchMutationRequest, WatchRule, WatchRuleCreateRequest, WatchRuleDeleteRequest,
-    WatchRulesListResponse,
+    AccountResponse, AccountSubscription, AskRequest, AskResponse, AuthInviteRequest,
+    AuthInviteResponse, AuthLoginRequest, AuthLogoutResponse, AuthMeResponse, AuthRegisterRequest,
+    AuthUserResponse, ChangedCountResponse, CompanyProfileDetail, CompanyProfileResponse,
+    CompanyProfileSummary, CompanyProfileUpsertRequest, CompanyProfilesListResponse,
+    CompanyResolveItem, CompanyResolveQuery, CompanyResolveResponse, CompanySearchItem,
+    CompanySearchQuery, CompanySearchResponse, CompanyVerifyQuery, CompanyVerifyResponse,
+    CompanyVerifySuggestion, CompareRequest, CompareResponse, DeskResponse, DeskTicker,
+    ErrorResponse, HealthResponse, ListQuery, MutationResponse, Notification,
+    NotificationReadRequest, NotificationsListResponse, PortfolioListResponse, PortfolioPosition,
+    PortfolioUpsertRequest, PreferencesResponse, PreferencesUpdateRequest, PublicUser,
+    ReportGenerateResponse, ResearchSessionDetail, ResearchSessionResponse, ResearchSessionSummary,
+    ResearchSessionsResponse, ResearchStreamEvent, TickerQuery, UnreadResponse, UserPreferences,
+    UserRole, WatchEntry, WatchListResponse, WatchMutationRequest, WatchRule,
+    WatchRuleCreateRequest, WatchRuleDeleteRequest, WatchRulesListResponse,
 };
 use echo_data::{
     CalendarService, EvidenceService, FilingsService, FmpSearchService, FundamentalsRow,
-    FundamentalsService, HistoricalValuationService, Market, PeerService, QuoteService,
+    FundamentalsService, HistoricalValuationService, HkAnnualReportService, Market,
+    NormalizedHkFinancials, PeerService, QuoteService, SecCompanyFactsService, SecFundamentals,
     detect_market, normalize_ticker, pct_change, pct_of,
 };
 use echo_db::{
-    CompanyProfileRepository, CompanyProfileUpsert, CompanyRepository, HkFinancialsRepository,
-    HkFinancialsRow, MarketRepository, NotificationsRepository, Pool, PortfolioRepository,
-    PortfolioUpsert, PreferencesPatch, PreferencesRepository, RateLimitRepository,
-    ResearchSessionRepository, SaveResearchSession, UserPreferencesRow, WatchlistRepository,
+    AuthRepository, CompanyProfileRepository, CompanyProfileUpsert, CompanyRepository,
+    HkFinancialsRepository, HkFinancialsRow, MarketRepository, NotificationsRepository, Pool,
+    PortfolioRepository, PortfolioUpsert, PreferencesPatch, PreferencesRepository,
+    RateLimitRepository, ResearchSessionRepository, SaveResearchSession, UserPreferencesRow,
+    WatchlistRepository,
 };
 use echo_domain::{
     EarningsCalendar, Evidence, Filing, Financials, HistoricalValuation, MarketSnapshot,
@@ -85,6 +88,8 @@ pub struct AppState {
     fundamentals: Option<FundamentalsService>,
     calendar: Option<CalendarService>,
     historical_valuation: Option<HistoricalValuationService>,
+    sec_company_facts: Option<SecCompanyFactsService>,
+    hk_annual_reports: Option<HkAnnualReportService>,
     peers: Option<PeerService>,
     filings: Option<FilingsService>,
     evidence: Option<EvidenceService>,
@@ -106,6 +111,8 @@ impl AppState {
             fundamentals: None,
             calendar: None,
             historical_valuation: None,
+            sec_company_facts: None,
+            hk_annual_reports: None,
             peers: None,
             filings: None,
             evidence: None,
@@ -398,6 +405,26 @@ async fn auth_me(
     let user = resolve_request_user(&state, &headers).await?;
     let multi_user = state.pool.is_some() && !state.auth_disabled;
     Ok(Json(AuthMeResponse { user, multi_user }))
+}
+
+async fn account_get(
+    State(state): State<AppState>,
+    Extension(user): Extension<PublicUser>,
+) -> Result<Json<AccountResponse>, ApiError> {
+    let subscription = AuthRepository::new(require_pool(&state)?)
+        .subscription_for_user(&user.id)
+        .await
+        .map_err(map_db_error)?
+        .map(|row| AccountSubscription {
+            plan_id: row.plan_id,
+            plan_name: row.plan_name,
+            tier: row.tier,
+            status: row.status,
+            current_period_end: row.current_period_end.to_rfc3339(),
+            max_daily_calls: row.max_daily_calls,
+            features: row.features,
+        });
+    Ok(Json(AccountResponse { user, subscription }))
 }
 
 async fn auth_invite(
@@ -1206,10 +1233,15 @@ fn financials_from_fmp_row(row: &FundamentalsRow) -> Financials {
         operating_cash_flow: row.operating_cash_flow,
         cash_and_equivalents: row.cash_and_equivalents,
         net_cash: row.net_cash,
-        // 单季 EPS：标为未年化，禁止 price/eps 反推 PE；估值用 pe_ttm。
-        eps: row.eps,
-        eps_annualized: Some(false),
+        // EPS 优先用 TTM（`netIncomePerShareTTM`）并标为已年化，估值 PE 法才成立；供应商这轮
+        // 没给 TTM 时退回单季并标未年化——宁可不给估值区间，也不拿单季 EPS 反推出四倍虚高的
+        // 目标价。研究语境下"每股收益"本就该是 TTM 口径，护栏登记的也是这个值。
+        eps: row.eps_ttm.or(row.eps),
+        eps_annualized: row.eps_ttm.is_none().then_some(false),
         pe: row.pe_ttm,
+        free_cash_flow: row.free_cash_flow_ttm,
+        shares_outstanding: row.shares_outstanding,
+        total_debt: row.total_debt,
         revenue_growth: pct_change(row.revenue, row.revenue_prior),
         gross_margin: pct_of(row.gross_profit, row.revenue),
         operating_margin: pct_of(row.operating_income, row.revenue),
@@ -1244,6 +1276,51 @@ fn financials_from_hk_row(row: &HkFinancialsRow) -> Financials {
         // 只有明确 FY 才把 EPS 当年化；半年/季度口径禁止 price/eps 反推 PE。
         eps_annualized: Some(row.period_type.as_deref() == Some("FY")),
         period: row.period_label.clone(),
+        ..Default::default()
+    }
+}
+
+fn financials_from_sec(row: &SecFundamentals) -> Financials {
+    Financials {
+        provider_ok: row.provider_ok(),
+        currency: row.currency.clone(),
+        revenue: row.revenue,
+        gross_profit: row.gross_profit,
+        operating_income: row.operating_income,
+        net_income: row.net_income,
+        operating_cash_flow: row.operating_cash_flow,
+        cash_and_equivalents: row.cash_and_equivalents,
+        eps: row.eps,
+        // Company Facts 补救只会返回严格 TTM 或完整 FY，两者都可用于 PE 口径。
+        eps_annualized: row.eps.map(|_| true),
+        shares_outstanding: row.shares_outstanding,
+        gross_margin: pct_of(row.gross_profit, row.revenue),
+        operating_margin: pct_of(row.operating_income, row.revenue),
+        net_margin: pct_of(row.net_income, row.revenue),
+        period: row.period_end.clone(),
+        ..Default::default()
+    }
+}
+
+fn financials_from_normalized_hk(row: &NormalizedHkFinancials) -> Financials {
+    Financials {
+        provider_ok: true,
+        currency: Some(row.currency.clone()),
+        revenue: row.revenue,
+        gross_profit: row.gross_profit,
+        operating_income: row.operating_income,
+        net_income: row.net_income,
+        operating_cash_flow: row.operating_cash_flow,
+        cash_and_equivalents: row.cash_and_equivalents,
+        net_cash: row.net_cash,
+        free_cash_flow: row.free_cash_flow,
+        eps: row.eps,
+        eps_annualized: Some(row.period_type.as_deref() == Some("FY")),
+        revenue_growth: pct_change(row.revenue, row.revenue_prior),
+        gross_margin: pct_of(row.gross_profit, row.revenue),
+        operating_margin: pct_of(row.operating_income, row.revenue),
+        net_margin: pct_of(row.net_income, row.revenue),
+        period: row.period_end.clone().or_else(|| row.period_label.clone()),
         ..Default::default()
     }
 }
@@ -1337,6 +1414,9 @@ impl ResearchPorts for ApiResearchPorts {
             min: summary.min,
             max: summary.max,
             median: summary.median,
+            p25: summary.p25,
+            p75: summary.p75,
+            latest: summary.latest,
         })
     }
 
@@ -1398,6 +1478,157 @@ impl ResearchPorts for ApiResearchPorts {
                 source_domain: e.source_domain,
             })
             .collect()
+    }
+
+    async fn recover_missing_facts(&self, request: FactRecoveryRequest) -> FactRecovery {
+        let mut recovery = FactRecovery::default();
+        let ticker = normalize_ticker(&request.ticker);
+        let market = detect_market(&ticker);
+        let needs_financials = request.gaps.iter().any(|gap| {
+            matches!(
+                gap,
+                ResearchGap::FinancialStatements
+                    | ResearchGap::TtmEps
+                    | ResearchGap::Revenue
+                    | ResearchGap::SharesOutstanding
+                    | ResearchGap::Valuation
+            )
+        });
+
+        if request.gaps.contains(&ResearchGap::MarketPrice)
+            && self.refresh_quote(&ticker).await.is_ok()
+        {
+            if let Some((company, snapshot)) = self.load_company_market(&ticker).await {
+                recovery.company_name = company.name_zh;
+                recovery.market = Some(snapshot);
+                recovery.sources.push("quote_fallback".into());
+            }
+        }
+
+        // Round 1 的财务换源：美股走官方 SEC Company Facts；港股发现并严格解析最近 FY PDF。
+        let needs_official_filing = request.gaps.contains(&ResearchGap::RecentFilings);
+        if (needs_financials || needs_official_filing) && request.round == 1 {
+            match market {
+                Market::Us => {
+                    if needs_financials {
+                        if let Some(service) = self.state.sec_company_facts.as_ref() {
+                            match service.fetch(&ticker).await {
+                                Ok(row) if row.provider_ok() => {
+                                    recovery.company_name = row.company_name.clone();
+                                    recovery.fundamentals = Some(LoadedFundamentals {
+                                        financials: financials_from_sec(&row),
+                                        pe_ttm: None,
+                                        company_name: row.company_name,
+                                    });
+                                    recovery.sources.push("sec_company_facts".into());
+                                }
+                                Ok(_) => {}
+                                Err(error) => {
+                                    warn!(ticker, error = %error, "SEC Company Facts 补救未核到");
+                                }
+                            }
+                        }
+                    }
+                }
+                Market::Hk => {
+                    if let Some(service) = self.state.hk_annual_reports.as_ref() {
+                        match service.recover(&ticker).await {
+                            Ok(result) => {
+                                recovery.filings.push(Filing {
+                                    form: "HKEX FY".into(),
+                                    filed_date: result
+                                        .announcement
+                                        .published_at
+                                        .map(|date| date.date_naive().to_string()),
+                                    source_url: result.announcement.url,
+                                });
+                                recovery.sources.push("hkex_annual_report_pdf".into());
+                                if let Some(row) = result.financials {
+                                    recovery.fundamentals = Some(LoadedFundamentals {
+                                        financials: financials_from_normalized_hk(&row),
+                                        pe_ttm: None,
+                                        company_name: None,
+                                    });
+                                }
+                            }
+                            Err(error) => {
+                                warn!(ticker, error = %error, "HKEX 年报补救未核到");
+                            }
+                        }
+                    }
+                }
+                Market::Unsupported => {}
+            }
+        }
+
+        if market == Market::Us && needs_official_filing {
+            recovery.filings = self.load_recent_filings(&ticker).await;
+            if !recovery.filings.is_empty() {
+                recovery.sources.push("sec_filings_retry".into());
+            }
+        }
+
+        if request.gaps.contains(&ResearchGap::HistoricalValuation) {
+            recovery.historical_valuation = self.load_historical_valuation(&ticker).await;
+            if recovery.historical_valuation.is_some() {
+                recovery.sources.push("historical_valuation_retry".into());
+            }
+        }
+        if request.gaps.contains(&ResearchGap::PeerComparison) {
+            recovery.peer_anchor = self.load_peer_anchor(&ticker, request.multiple_type).await;
+            if recovery.peer_anchor.is_some() {
+                recovery.sources.push("peer_anchor_retry".into());
+            }
+        }
+        recovery
+    }
+
+    async fn load_company_memory(&self, user_id: &str, ticker: &str) -> Option<CompanyMemory> {
+        let pool = self.state.pool.as_ref()?;
+        let row = CompanyProfileRepository::new(pool)
+            .get(user_id, ticker)
+            .await
+            .ok()??;
+        Some(CompanyMemory {
+            ticker: row.ticker,
+            company_name: row.company_name,
+            thesis: row.thesis,
+            bull: row.bull.unwrap_or_default(),
+            bear: row.bear.unwrap_or_default(),
+            monitors: row.monitors.unwrap_or_default(),
+            falsifiers: row.falsifiers.unwrap_or_default(),
+            profile_md: row.profile_md,
+            turn_count: row.turn_count,
+        })
+    }
+
+    async fn save_company_memory(
+        &self,
+        user_id: &str,
+        ticker: &str,
+        update: CompanyMemoryUpdate,
+    ) -> Result<(), String> {
+        let Some(pool) = self.state.pool.as_ref() else {
+            return Ok(());
+        };
+        CompanyProfileRepository::new(pool)
+            .upsert(
+                user_id,
+                ticker,
+                &CompanyProfileUpsert {
+                    company_name: update.company_name,
+                    valuation_method: update.valuation_method,
+                    valuation_bear: update.valuation_bear,
+                    valuation_base: update.valuation_base,
+                    valuation_bull: update.valuation_bull,
+                    valuation_current_price: update.valuation_current_price,
+                    profile_md: Some(update.profile_md),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     async fn complete_answer(&self, system: &str, user: &str, user_id: &str) -> Option<String> {
@@ -1645,6 +1876,7 @@ async fn ask_stream(
 pub fn router(state: AppState) -> Router {
     let ask_rate_limited = middleware::from_fn_with_state(state.clone(), rate_limit_ask);
     let protected = Router::new()
+        .route("/api/account", get(account_get))
         .route("/api/ask", post(ask).route_layer(ask_rate_limited.clone()))
         .route(
             "/api/ask/stream",
@@ -1754,6 +1986,10 @@ pub async fn run() {
     let historical_valuation = pool
         .clone()
         .and_then(|pool| HistoricalValuationService::new(pool, config.data_sources.clone()).ok());
+    let sec_company_facts = SecCompanyFactsService::new(config.data_sources.clone()).ok();
+    let hk_annual_reports = pool
+        .clone()
+        .and_then(|pool| HkAnnualReportService::new(pool).ok());
     let peers = pool
         .clone()
         .and_then(|pool| PeerService::new(pool, config.data_sources.clone()).ok());
@@ -1772,6 +2008,8 @@ pub async fn run() {
         fundamentals,
         calendar,
         historical_valuation,
+        sec_company_facts,
+        hk_annual_reports,
         peers,
         filings,
         evidence,
@@ -2066,6 +2304,8 @@ mod tests {
             fundamentals: None,
             calendar: None,
             historical_valuation: None,
+            sec_company_facts: None,
+            hk_annual_reports: None,
             peers: None,
             filings: None,
             evidence: None,

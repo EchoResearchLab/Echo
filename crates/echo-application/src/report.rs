@@ -4,13 +4,15 @@
 //! 确定性报告——两条路径都只引用同一份 `FactsRegistry` 已核数字。
 
 use crate::answer_prompt::{
-    AnswerContext, build_system_prompt, facts_block, field, valuation_line,
+    AnswerContext, build_system_prompt, facts_block, field, supplemental_research_context,
+    valuation_line,
 };
 use crate::research::{
     PersistResearchSession, PriorTurn, ResearchFacts, ResearchPorts, ResearchService,
-    citation_guard_view, earnings_view, filings_view, guard_view, load_prior_turns_for, route_view,
-    valuation_view,
+    citation_guard_view, earnings_view, filings_view, guard_view, load_prior_turns_for,
+    persist_company_memory_if_safe, route_view, valuation_view,
 };
+use crate::research_memory::CompanyMemory;
 use crate::{DecisionPanel, build_panel};
 use echo_contracts::{AskRequest, ReportGenerateResponse, ReportMode};
 use echo_domain::ResearchRoute;
@@ -50,7 +52,10 @@ impl ReportService {
             facts.peer_anchor.as_ref(),
             &facts.filings,
         );
-        let prior_turns = load_prior_turns_for(ports, user_id, &req).await;
+        let (prior_turns, memory) = tokio::join!(
+            load_prior_turns_for(ports, user_id, &req),
+            ports.load_company_memory(user_id, &req.ticker)
+        );
         let ctx = AnswerContext {
             question: &req.question,
             name_zh: facts.company.name_zh.as_deref(),
@@ -64,7 +69,13 @@ impl ReportService {
         };
 
         let system = build_report_system_prompt();
-        let user_prompt = build_report_prompt(&req.question, &ctx);
+        let user_prompt = build_report_prompt(
+            &req.question,
+            &ctx,
+            memory.as_ref(),
+            facts.peer_anchor.as_ref(),
+            facts.recovery.degradation,
+        );
         let model_answer = ports.complete_answer(&system, &user_prompt, user_id).await;
         let (markdown, mode) = match model_answer {
             Some(text) if text.trim().chars().count() > MIN_MODEL_REPORT_CHARS => {
@@ -75,6 +86,18 @@ impl ReportService {
 
         let fact_guard = Some(guard_view(&req, &facts, &panel, &markdown));
         let citation_guard = citation_guard_view(&facts.evidence, &markdown);
+        persist_company_memory_if_safe(
+            ports,
+            user_id,
+            &req,
+            &facts,
+            &panel,
+            memory.as_ref(),
+            Some(&markdown),
+            fact_guard.as_ref(),
+            citation_guard.as_ref(),
+        )
+        .await;
 
         let response = ReportGenerateResponse {
             ticker: panel.ticker.clone(),
@@ -120,7 +143,13 @@ fn build_report_system_prompt() -> String {
 
 /// 报告 user 提示词：与聊天回答共用同一份事实块（`facts_block`），只在结构与篇幅要求上
 /// 分叉——报告固定七段、1200-2500 字，聊天回答不强制结构。
-fn build_report_prompt(question: &str, ctx: &AnswerContext) -> String {
+fn build_report_prompt(
+    question: &str,
+    ctx: &AnswerContext,
+    memory: Option<&CompanyMemory>,
+    peer_anchor: Option<&echo_domain::PeerAnchor>,
+    degradation: crate::research_orchestrator::ResearchDegradation,
+) -> String {
     let name = ctx.name_zh.unwrap_or(ctx.panel.ticker.as_str());
     let question = if question.trim().is_empty() {
         format!("{name} 值不值得研究")
@@ -133,6 +162,11 @@ fn build_report_prompt(question: &str, ctx: &AnswerContext) -> String {
         ctx.panel.ticker
     ));
     out.push_str(&facts_block(ctx));
+    out.push_str(&supplemental_research_context(
+        memory,
+        peer_anchor,
+        degradation,
+    ));
     out.push_str(
         "\n\n写作规则：\n\
          - 输出中文 Markdown，用 ## 小标题分节，不要表格。\n\
@@ -267,7 +301,10 @@ async fn persist_report<P: ResearchPorts>(
         report_markdown: Some(markdown.to_string()),
         decision_panel: serde_json::to_value(valuation_view(panel)).ok(),
         full_research: Some(markdown.to_string()),
-        data_sources: Some(serde_json::json!({ "connected": panel.connected_sources.clone() })),
+        data_sources: Some(serde_json::json!({
+            "connected": panel.connected_sources.clone(),
+            "recovery": facts.recovery,
+        })),
         turn_count: Some(prior_turns.len() as i32 + 1),
         thread,
     };

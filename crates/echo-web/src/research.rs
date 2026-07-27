@@ -14,10 +14,10 @@
 use crate::api;
 use crate::dialog::confirm_destructive;
 use crate::format;
-use crate::icons::{EchoArt, Icon};
+use crate::icons::{EchoArt, EchoMark, Icon};
 use echo_contracts::{
-    AnswerSource, AskRequest, AskResponse, CitationGuardView, CompareLegView, CompareResponse,
-    Decimal, EarningsCalendarView, EvidenceView, GuardView, MutationResponse,
+    AnswerSource, AskRequest, AskResponse, CitationGuardView, CompanyHeaderView, CompareLegView,
+    CompareResponse, Decimal, EarningsCalendarView, EvidenceView, GuardView, MutationResponse,
     ResearchSessionDetail, ResearchSessionResponse, ResearchSessionsResponse, ResearchStreamEvent,
     ResearchStreamStage, ResearchStreamStageName, RouteView, ValuationView,
 };
@@ -32,7 +32,9 @@ const STREAM_TIMEOUT_MS: i32 = 120_000;
 enum TurnStatus {
     Streaming {
         stage: Option<ResearchStreamStage>,
+        stages: Vec<ResearchStreamStage>,
         meta_route: Option<RouteView>,
+        meta_company: Option<CompanyHeaderView>,
         meta_valuation: Option<ValuationView>,
         meta_completeness: Option<u8>,
         meta_sources: Vec<String>,
@@ -54,7 +56,9 @@ impl TurnStatus {
     fn streaming_default() -> Self {
         Self::Streaming {
             stage: None,
+            stages: Vec::new(),
             meta_route: None,
+            meta_company: None,
             meta_valuation: None,
             meta_completeness: None,
             meta_sources: Vec::new(),
@@ -148,25 +152,62 @@ fn intent_label(s: &str) -> &str {
     }
 }
 
-fn stage_label(stage: Option<&ResearchStreamStage>) -> String {
-    let label = match stage.map(|stage| stage.name) {
-        None => "正在规划研究路径…",
-        Some(ResearchStreamStageName::Routing) => "正在判断研究意图…",
-        Some(ResearchStreamStageName::Resolving) => "正在确认研究主体…",
-        Some(ResearchStreamStageName::MarketFinancials) => "正在核对行情与财报…",
-        Some(ResearchStreamStageName::Evidence) => "正在检索网页证据…",
-        Some(ResearchStreamStageName::Valuation) => "正在构建估值框架…",
-        Some(ResearchStreamStageName::Generating) => "正在综合证据并作答…",
-        Some(ResearchStreamStageName::FactCheck) => "正在核对事实与引用…",
-        Some(ResearchStreamStageName::Assembling) => "正在组装事实…",
-        Some(ResearchStreamStageName::Verifying) => "正在核对数字护栏…",
-        Some(ResearchStreamStageName::Persisting) => "正在落库…",
-    };
-    match stage {
-        Some(stage) if stage.index > 0 && stage.total > 0 => {
-            format!("第 {}/{} 步 · {label}", stage.index, stage.total)
+fn stage_activity(name: Option<ResearchStreamStageName>) -> &'static str {
+    match name {
+        None => "正在理解你的问题与研究目标",
+        Some(ResearchStreamStageName::Routing) => "正在理解问题意图与研究深度",
+        Some(ResearchStreamStageName::Resolving) => "正在确认公司、证券代码与研究主体",
+        Some(ResearchStreamStageName::MarketFinancials) => "正在核对实时行情、财报与关键指标",
+        Some(ResearchStreamStageName::Evidence) => "正在检索原始披露、网页证据与反例",
+        Some(ResearchStreamStageName::Valuation) => "正在建立估值框架与关键假设",
+        Some(ResearchStreamStageName::Generating) => "正在综合证据并组织研究结论",
+        Some(ResearchStreamStageName::FactCheck) => "正在核对事实、数字与引用",
+        Some(ResearchStreamStageName::Assembling) => "正在整理已经核实的研究事实",
+        Some(ResearchStreamStageName::Verifying) => "正在检查数字护栏与结论边界",
+        Some(ResearchStreamStageName::Persisting) => "正在保存本轮研究上下文",
+    }
+}
+
+fn stage_short_label(name: ResearchStreamStageName) -> &'static str {
+    match name {
+        ResearchStreamStageName::Routing => "理解问题",
+        ResearchStreamStageName::Resolving => "确认主体",
+        ResearchStreamStageName::MarketFinancials => "核对财务",
+        ResearchStreamStageName::Evidence => "检索证据",
+        ResearchStreamStageName::Valuation => "估值框架",
+        ResearchStreamStageName::Generating => "综合作答",
+        ResearchStreamStageName::FactCheck => "事实核验",
+        ResearchStreamStageName::Assembling => "整理事实",
+        ResearchStreamStageName::Verifying => "数字护栏",
+        ResearchStreamStageName::Persisting => "保存会话",
+    }
+}
+
+/// 把会话按天分组，保持服务端给的倒序。返回 `(组标题, 该组会话)`，标题用"今天/昨天/日期"。
+///
+/// 这里只按 `updated_at` 的日期部分切分，不做任何排序或去重：服务端已按更新时间倒序，
+/// 前端再排一次只会在两边口径不一致时产生难查的错位。
+fn group_sessions_by_day(
+    sessions: Vec<echo_contracts::ResearchSessionSummary>,
+) -> Vec<(String, Vec<echo_contracts::ResearchSessionSummary>)> {
+    let mut groups: Vec<(String, Vec<_>)> = Vec::new();
+    for item in sessions {
+        let label = format::day_label(&item.updated_at);
+        match groups.last_mut() {
+            Some((last, bucket)) if *last == label => bucket.push(item),
+            _ => groups.push((label, vec![item])),
         }
-        _ => label.to_string(),
+    }
+    groups
+}
+
+/// 数据完备度的研究语言表述。设计系统禁止"完备度 xx%"这类产品状态词——读研究结论的人
+/// 要知道的是"这个判断有多少事实支撑"，不是一个进度条读数。
+fn completeness_phrase(completeness: u8) -> &'static str {
+    match completeness {
+        80..=u8::MAX => "主要事实已核到",
+        50..=79 => "部分事实未核到，置信度下降",
+        _ => "多数事实未核到，仅供定性参考",
     }
 }
 
@@ -228,7 +269,9 @@ fn attach_stream(
         turn.status.update(|status| {
             let TurnStatus::Streaming {
                 stage,
+                stages,
                 meta_route,
+                meta_company,
                 meta_valuation,
                 meta_completeness,
                 meta_sources,
@@ -246,12 +289,21 @@ fn attach_stream(
                         turn.ticker.set(m.ticker);
                     }
                     *meta_route = Some(m.route);
+                    *meta_company = m.company;
                     *meta_valuation = Some(m.valuation);
                     *meta_completeness = Some(m.data_completeness);
                     *meta_sources = m.connected_sources;
                     *meta_earnings = m.earnings;
                 }
-                ResearchStreamEvent::Stage(s) => *stage = Some(s),
+                ResearchStreamEvent::Stage(s) => {
+                    if !stages
+                        .iter()
+                        .any(|seen| seen.index == s.index && seen.name == s.name)
+                    {
+                        stages.push(s.clone());
+                    }
+                    *stage = Some(s);
+                }
                 ResearchStreamEvent::Delta(d) => delta_text.push_str(&d.text),
                 ResearchStreamEvent::Guard(g) => *guard = g.fact_guard,
                 ResearchStreamEvent::Final(_)
@@ -259,7 +311,8 @@ fn attach_stream(
                 | ResearchStreamEvent::Error(_) => unreachable!(),
             }
         });
-        on_activity.call(());
+        // 流式 delta 只增长当前答案，不再每个 token 强制贴底。逐字滚动会让整张页面
+        // 连续上移，用户看到的是抖动而不是流畅生成；终态与新消息仍会正常归位。
     };
 
     let on_error = move |message: String| {
@@ -322,7 +375,78 @@ fn schedule_turn_timeout(_turn: Turn, _timeout_ms: i32, _message: &'static str) 
 
 // ── Components ────────────────────────────────────────────────────────────
 
-/// 估值三段带（bear / base / bull）。
+/// 估值带与现价在同一条轴上的位置：`(带左缘%, 带宽%, 现价%)`。全程 Decimal，不碰浮点。
+///
+/// 轴的范围取 `min(熊,现价) … max(牛,现价)` 再留 8% 余量，**不是**固定的熊–牛。原因：现价
+/// 高于牛（或低于熊）恰恰是最该看清的情形，若把轴固定成熊–牛，现价只能溢出到轴外——实测
+/// AAPL 现价 324.98 对牛 272.01 会被推到 112% 处，标记直接飘到卡片外的背景上。夹到端点也
+/// 不行：那样"贵一点点"和"贵一倍"长得一模一样，而这正是这条轴唯一要回答的问题。
+/// 让轴自适应后，带子成为轴上的一段，现价与它的距离就是"贵/便宜多少"的直观表达。
+fn band_geometry(bear: Decimal, bull: Decimal, price: Decimal) -> Option<(String, String, String)> {
+    let lo_raw = bear.min(price);
+    let hi_raw = bull.max(price);
+    let pad = (hi_raw - lo_raw) * Decimal::new(8, 2);
+    let (lo, hi) = (lo_raw - pad, hi_raw + pad);
+    let span = hi - lo;
+    if span <= Decimal::ZERO {
+        return None;
+    }
+    let pct = |v: Decimal| (v - lo) * Decimal::ONE_HUNDRED / span;
+    let left = pct(bear);
+    let width = pct(bull) - left;
+    let render = |v: Decimal| v.round_dp(2).normalize().to_string();
+    Some((render(left), render(width), render(pct(price))))
+}
+
+/// 行情抬头——答案上方"研究的是哪家、现在多少钱"。
+///
+/// 放在答案之上而非折叠面板里：读一段估值判断时，"现价多少"是理解它的前提，不该要展开
+/// 才看得到。每个字段各自可缺，缺的就不画——一行只剩代码时整个抬头不渲染（见后端
+/// `company_header`），绝不用 0 占位。
+#[component]
+pub(crate) fn CompanyHeader(c: CompanyHeaderView) -> impl IntoView {
+    let name = c.name.clone().unwrap_or_else(|| c.ticker.clone());
+    let show_ticker = c.name.is_some();
+    let currency = c.currency.clone().unwrap_or_default();
+    // 涨跌方向决定语义色；缺涨跌幅时不着色，也不假装持平。
+    let direction = c.change_percent.map(|v| match v.cmp(&Decimal::ZERO) {
+        std::cmp::Ordering::Greater => "is-up",
+        std::cmp::Ordering::Less => "is-down",
+        std::cmp::Ordering::Equal => "is-flat",
+    });
+    view! {
+        <header class="company-header">
+            <div class="ch-identity">
+                <h2 class="ch-name">{name}</h2>
+                {show_ticker.then(|| view! { <span class="ch-ticker">{c.ticker.clone()}</span> })}
+            </div>
+            <div class="ch-quote">
+                {c.price.map(|p| view! {
+                    <span class="ch-price">
+                        {p.normalize().to_string()}
+                        {(!currency.is_empty()).then(|| view! {
+                            <small>{currency.clone()}</small>
+                        })}
+                    </span>
+                })}
+                {c.change_percent.map(|v| view! {
+                    <span class=move || format!("ch-change {}", direction.unwrap_or("is-flat"))>
+                        {format::signed_percent(v)}
+                    </span>
+                })}
+                {c.market_cap.map(|m| view! {
+                    <span class="ch-cap">"市值 " {format::compact_amount(m)}</span>
+                })}
+            </div>
+        </header>
+    }
+}
+
+/// 估值区间——刻度轴 + 逐法明细 + 关键假设。
+///
+/// 这里是「让每个判断都有证据」最该兑现的地方：只报三个数字，用户无从判断该不该信。
+/// 轴让"现价落在带内还是带外"一眼可见（带外 = 贵/便宜），逐法明细摊开每条方法各自的
+/// 结论——方法之间分歧大本身就是重要信息，被平均成一个数就看不见了。
 #[component]
 pub(crate) fn ValuationBand(v: ValuationView) -> impl IntoView {
     if let Some(reason) = v.cannot_value_reason.clone() {
@@ -334,28 +458,98 @@ pub(crate) fn ValuationBand(v: ValuationView) -> impl IntoView {
         }
         .into_view();
     }
+
+    let axis = match (v.bear, v.bull, v.current_price) {
+        (Some(bear), Some(bull), Some(price)) if bull > bear => {
+            band_geometry(bear, bull, price).map(|geo| (geo, decimal_text(Some(price))))
+        }
+        _ => None,
+    };
+    let details = v.method_detail.clone();
+    let assumptions = v.key_assumptions.clone();
+
     view! {
         <div class="valuation-block">
             <div class="valuation-head">
                 <span>"估值区间"</span>
                 <em>{v.method.clone()}</em>
             </div>
-            <div class="val-bands">
-                <div class="val-cell">
-                    <span class="val-k">"熊"</span>
-                    <span class="val-v">{decimal_text(v.bear)}</span>
-                </div>
-                <div class="val-cell base-cell">
-                    <span class="val-k">"基准"</span>
-                    <span class="val-v">{decimal_text(v.base)}</span>
-                </div>
-                <div class="val-cell">
-                    <span class="val-k">"牛"</span>
-                    <span class="val-v">{decimal_text(v.bull)}</span>
+
+            <div class="val-scale">
+                {axis.clone().map(|((left, width, price_x), price_text)| view! {
+                    <div class="val-track">
+                        <span
+                            class="val-track-fill"
+                            style=move || format!("left:{left}%;width:{width}%")
+                        ></span>
+                        <span
+                            class="val-price-marker"
+                            style=move || format!("left:{price_x}%")
+                        >
+                            <span class="val-price-dot"></span>
+                            <span class="val-price-tag">"现价 " {price_text}</span>
+                        </span>
+                    </div>
+                })}
+                <div class="val-bands">
+                    <div class="val-cell">
+                        <span class="val-k">"熊"</span>
+                        <span class="val-v">{decimal_text(v.bear)}</span>
+                    </div>
+                    <div class="val-cell base-cell">
+                        <span class="val-k">"基准"</span>
+                        <span class="val-v">{decimal_text(v.base)}</span>
+                    </div>
+                    <div class="val-cell">
+                        <span class="val-k">"牛"</span>
+                        <span class="val-v">{decimal_text(v.bull)}</span>
+                    </div>
                 </div>
             </div>
-            {v.upside.clone().map(|u| view! {
-                <p class="val-upside">"相对现价 " <strong>{u}</strong></p>
+
+            {v.upside.clone().map(|u| {
+                // 负空间 = 现价高于基准 = 贵。语义色只标方向，不替用户下判断。
+                let cheap = !u.trim_start().starts_with('-');
+                view! {
+                    <p class="val-upside" class:is-cheap=cheap>
+                        "相对现价 " <strong>{u}</strong>
+                    </p>
+                }
+            })}
+
+            {(!details.is_empty()).then(|| view! {
+                <details class="val-methods">
+                    <summary>
+                        {format!("逐法明细（{} 条）", details.len())}
+                    </summary>
+                    <table class="val-method-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">"方法"</th>
+                                <th scope="col">"熊"</th>
+                                <th scope="col">"基准"</th>
+                                <th scope="col">"牛"</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {details.into_iter().map(|m| view! {
+                                <tr>
+                                    <th scope="row">{m.name}</th>
+                                    <td>{decimal_text(Some(m.bear))}</td>
+                                    <td>{decimal_text(Some(m.base))}</td>
+                                    <td>{decimal_text(Some(m.bull))}</td>
+                                </tr>
+                            }).collect_view()}
+                        </tbody>
+                    </table>
+                    {(!assumptions.is_empty()).then(|| view! {
+                        <ul class="val-assumptions">
+                            {assumptions.into_iter()
+                                .map(|a| view! { <li>{a}</li> })
+                                .collect_view()}
+                        </ul>
+                    })}
+                </details>
             })}
         </div>
     }
@@ -389,11 +583,11 @@ pub(crate) fn CompletenessRow(completeness: u8) -> impl IntoView {
                 aria-valuenow=completeness
                 aria-valuemin="0"
                 aria-valuemax="100"
-                aria-label="数据完备度"
+                aria-label="事实覆盖"
             >
                 <span class="completeness-fill" style=move || format!("width:{completeness}%")></span>
             </div>
-            <span class="completeness-label">"数据完备度 " {completeness} "%"</span>
+            <span class="completeness-label">{completeness_phrase(completeness)}</span>
         </div>
     }
 }
@@ -436,6 +630,44 @@ pub(crate) fn SourceCards(sources: Vec<EvidenceView>) -> impl IntoView {
                     </a>
                 }
             }).collect_view()}
+        </div>
+    }
+    .into_view()
+}
+
+/// 公司公告（SEC filings）——**一手证据**，与二手的网页证据卡分开呈现。
+///
+/// 此前后端取了公告、`connected_sources` 里也标着"最新公告"，前端却从不渲染：用户看得到
+/// "有这个数据源"，却看不到是哪几份、哪一天、去哪读原文。一手披露是这个产品里可信度最高
+/// 的一层证据，不该只当作一个统计数字。
+#[component]
+pub(crate) fn FilingCards(filings: Vec<echo_contracts::FilingView>) -> impl IntoView {
+    if filings.is_empty() {
+        return ().into_view();
+    }
+    view! {
+        <div class="filing-cards">
+            <p class="filing-cards-title">
+                "公司公告 · " {filings.len()} " 份（一手披露）"
+            </p>
+            <ul class="filing-list">
+                {filings.into_iter().map(|f| {
+                    let date = f.filed_date.clone().unwrap_or_else(|| "未核到日期".into());
+                    view! {
+                        <li>
+                            <a
+                                class="filing-item"
+                                href=f.source_url
+                                target="_blank"
+                                rel="noopener noreferrer"
+                            >
+                                <span class="filing-form">{f.form}</span>
+                                <span class="filing-date">{date}</span>
+                            </a>
+                        </li>
+                    }
+                }).collect_view()}
+            </ul>
         </div>
     }
     .into_view()
@@ -521,7 +753,7 @@ fn evidence_summary(
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(value) = completeness {
-        parts.push(format!("完备度 {value}%"));
+        parts.push(completeness_phrase(value).to_string());
     }
     if sources_len > 0 {
         parts.push(format!("{sources_len} 个数据源"));
@@ -593,82 +825,129 @@ fn EvidencePanel(
     .into_view()
 }
 
-/// 流式进行中的证据摘要条——和落地后的折叠面板同一行高、同一文案口径，但不可展开。
-/// 流式期间每个 token 都重渲染这张卡，`<details>` 的展开状态会被反复重置，所以这里
-/// 刻意不给交互，等落地后再变成真正可展开的面板。
+/// 流式进行中的卡片：直接展示服务端实际发来的研究阶段；只有文字高光移动，
+/// 容器与进度节点都保持静止，避免每个 token 重挂载时产生视觉抖动。
 #[component]
-fn EvidenceLiveStrip(
-    completeness: Option<u8>,
-    sources_len: usize,
-    guard: Option<GuardView>,
-) -> impl IntoView {
-    if completeness.is_none() && sources_len == 0 && guard.is_none() {
-        return ().into_view();
-    }
-    let summary_text = evidence_summary(completeness, sources_len, guard.as_ref(), None);
-    view! {
-        <div class="evidence-panel" aria-live="polite">
-            <div class="evidence-live-strip">
-                <span class="evidence-summary-text">{summary_text}</span>
-                <span class="evidence-live-hint">"作答完成后可展开"</span>
-            </div>
-        </div>
-    }
-    .into_view()
-}
-
-/// 流式进行中的卡片：阶段提示 + 从左到右的流动 + 打字机增量。
-/// 骨架不铺在答案上方——答案的位置从第一帧就固定。
-#[component]
-fn StreamingCard(
-    stage: Option<ResearchStreamStage>,
-    meta_completeness: Option<u8>,
-    meta_sources_len: usize,
-    delta_text: String,
-    guard: Option<GuardView>,
-) -> impl IntoView {
-    let has_text = !delta_text.is_empty();
-    let html = has_text.then(|| crate::markdown::render(&delta_text));
-    let progress_width = stage
-        .as_ref()
-        .filter(|stage| stage.index > 0 && stage.total > 0)
-        .map(|stage| {
-            let percent = stage.index.saturating_mul(100) / stage.total;
-            format!("width: {percent}%")
+fn StreamingCard(turn: Turn) -> impl IntoView {
+    // 思考进度与正文拆成两个 memo：delta 到达时只更新答案文本，不重挂思考过程。
+    // 这样左到右的文字高光可以连续播放，头像、卡片和阶段轨迹也不会每个 token 闪一下。
+    let stage_state = create_memo(move |_| {
+        turn.status.with(|status| match status {
+            TurnStatus::Streaming { stage, stages, .. } => (stage.clone(), stages.clone()),
+            _ => (None, Vec::new()),
         })
-        .unwrap_or_else(|| "width: 8%".to_string());
-    let current_stage_label = stage_label(stage.as_ref());
+    });
+    let delta_text = create_memo(move |_| {
+        turn.status.with(|status| match status {
+            TurnStatus::Streaming { delta_text, .. } => delta_text.clone(),
+            _ => String::new(),
+        })
+    });
     view! {
         <div class="answer-card">
             <div class="answer-text-section">
-                <p class="stage-label" aria-live="polite">
-                    <span class="stage-dot" aria-hidden="true"></span>
-                    {current_stage_label}
-                    <span class="thinking-wave" aria-hidden="true">
-                        <i></i><i></i><i></i><i></i><i></i>
-                    </span>
-                </p>
-                <div
-                    class="stage-progress"
-                    role="progressbar"
-                    aria-label="研究进度"
-                >
-                    <span class="stage-progress-fill" style=progress_width></span>
+                <div class="thinking-process" aria-live="polite">
+                    <div class="thinking-process-head">
+                        <span class="thinking-live-dot" aria-hidden="true"></span>
+                        <span>
+                            <strong class="thinking-shimmer">{move || {
+                                let (stage, _) = stage_state.get();
+                                stage_activity(stage.as_ref().map(|item| item.name))
+                            }}</strong>
+                            <small>{move || {
+                                let (stage, _) = stage_state.get();
+                                stage
+                                    .filter(|item| item.index > 0 && item.total > 0)
+                                    .map(|item| {
+                                        format!("真实模型链路 · {}/{}", item.index, item.total)
+                                    })
+                                    .unwrap_or_else(|| "正在准备研究链路".to_string())
+                            }}</small>
+                        </span>
+                    </div>
+                    <div class="thinking-trail" aria-label="已执行的模型步骤">
+                        {move || {
+                            let (stage, stages) = stage_state.get();
+                            let active = stage.as_ref().map(|item| (item.index, item.name));
+                            if stages.is_empty() {
+                                view! {
+                                    <span class="thinking-step is-current">
+                                        <i aria-hidden="true"></i>
+                                        "理解问题"
+                                    </span>
+                                }.into_view()
+                            } else {
+                                stages
+                                    .into_iter()
+                                    .map(|item| {
+                                        let class = if Some((item.index, item.name)) == active {
+                                            "thinking-step is-current"
+                                        } else {
+                                            "thinking-step is-complete"
+                                        };
+                                        view! {
+                                            <span class=class>
+                                                <i aria-hidden="true"></i>
+                                                {stage_short_label(item.name)}
+                                            </span>
+                                        }
+                                    })
+                                    .collect_view()
+                                    .into_view()
+                            }
+                        }}
+                    </div>
                 </div>
-                {match html {
-                    Some(html) => view! { <div class="answer-text is-streaming" inner_html=html></div> }.into_view(),
-                    None => view! {
-                        <div class="thinking-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>
-                    }.into_view(),
+                {move || {
+                    let text = delta_text.get();
+                    (!text.is_empty()).then(|| {
+                        let html = crate::markdown::render(&text);
+                        view! { <div class="answer-text is-streaming" inner_html=html></div> }
+                    })
                 }}
             </div>
-
-            <EvidenceLiveStrip
-                completeness=meta_completeness
-                sources_len=meta_sources_len
-                guard=guard
-            />
         </div>
+    }
+}
+
+#[component]
+fn TurnBody(turn: Turn, on_retry: Callback<()>) -> impl IntoView {
+    // Memo 只在 Streaming → 终态时通知父视图。流式期间 status 虽持续写入 delta，
+    // 这里的布尔值没有变化，因此 StreamingCard 不会被卸载重建。
+    let streaming = create_memo(move |_| turn.status.with(TurnStatus::is_streaming));
+    view! {
+        {move || {
+            if streaming.get() {
+                view! { <StreamingCard turn=turn /> }.into_view()
+            } else {
+                match turn.status.get() {
+                    TurnStatus::Done(response) => view! {
+                        <DoneCard res=response on_regenerate=on_retry />
+                    }.into_view(),
+                    TurnStatus::CompareDone(response) => view! {
+                        <CompareCard res=*response on_regenerate=on_retry />
+                    }.into_view(),
+                    TurnStatus::Archived(archived) => view! {
+                        <HistoryCard turn=*archived />
+                    }.into_view(),
+                    TurnStatus::Failed(message) => view! {
+                        <RetryableMessage
+                            message=message
+                            cancelled=false
+                            on_retry=on_retry
+                        />
+                    }.into_view(),
+                    TurnStatus::Cancelled => view! {
+                        <RetryableMessage
+                            message=String::new()
+                            cancelled=true
+                            on_retry=on_retry
+                        />
+                    }.into_view(),
+                    TurnStatus::Streaming { .. } => unreachable!(),
+                }
+            }
+        }}
     }
 }
 
@@ -738,6 +1017,7 @@ fn DoneCard(res: AskResponse, on_regenerate: Callback<()>) -> impl IntoView {
     let answer_text = res.answer.clone();
     view! {
         <div class="answer-card">
+            {res.company.clone().map(|c| view! { <CompanyHeader c=c /> })}
             <div class="answer-text-section">
                 {match res.answer.clone() {
                     Some(text) => {
@@ -753,6 +1033,8 @@ fn DoneCard(res: AskResponse, on_regenerate: Callback<()>) -> impl IntoView {
             </div>
 
             <AnswerActions text=answer_text ticker=res.ticker.clone() on_regenerate=on_regenerate />
+
+            <FilingCards filings=res.filings.clone() />
 
             <SourceCards sources=res.sources.clone() />
 
@@ -985,42 +1267,53 @@ fn HistorySidebar(
                     }
                     Some(Ok(data)) => {
                         let active_id = active_id.clone();
-                        data.sessions.into_iter().map(|item| {
-                            let is_active = active_id.as_deref() == Some(item.id.as_str());
-                            let go_id = item.id.clone();
-                            let del_id = item.id.clone();
-                            let ticker = item.ticker.clone().unwrap_or_default();
-                            let updated = format::timestamp(&item.updated_at);
-                            let title = item.title.clone();
+                        // 按天分组：几十条平铺时"这是今天问的还是上周问的"完全读不出来，
+                        // 时间戳挤在每一行的副标题里也扫不动。分组把时间提到组标题上，
+                        // 组内每行就只剩问题本身与代码。
+                        group_sessions_by_day(data.sessions).into_iter().map(|(day, items)| {
+                            let active_id = active_id.clone();
                             view! {
-                                <div class=if is_active { "session-item is-active" } else { "session-item" }>
-                                    <button
-                                        class="session-item-main"
-                                        title=item.title.clone()
-                                        on:click=move |_| on_select.call(Some(go_id.clone()))
-                                    >
-                                        <span class="session-item-title">{item.title.clone()}</span>
-                                        <span class="session-item-meta">
-                                            {(!ticker.is_empty()).then(|| view! { <b>{ticker.clone()}</b> })}
-                                            <span>{updated.clone()}</span>
-                                        </span>
-                                    </button>
-                                    <button
-                                        class="session-item-delete"
-                                        title="删除这条研究记录"
-                                        aria-label=format!("删除研究记录 {title}")
-                                        on:click=move |ev| {
-                                            ev.stop_propagation();
-                                            let id = del_id.clone();
-                                            confirm_destructive(
-                                                "删除研究记录",
-                                                "这条研究会话的全部问答与证据将被删除，无法恢复。",
-                                                "删除记录",
-                                                Callback::new(move |_| on_delete.call(id.clone())),
-                                            );
+                                <section class="session-group">
+                                    <h3 class="session-group-title">{day}</h3>
+                                    {items.into_iter().map(|item| {
+                                        let is_active = active_id.as_deref() == Some(item.id.as_str());
+                                        let go_id = item.id.clone();
+                                        let del_id = item.id.clone();
+                                        let ticker = item.ticker.clone().unwrap_or_default();
+                                        let time = format::clock(&item.updated_at);
+                                        let title = item.title.clone();
+                                        view! {
+                                            <div class=if is_active { "session-item is-active" } else { "session-item" }>
+                                                <button
+                                                    class="session-item-main"
+                                                    title=item.title.clone()
+                                                    on:click=move |_| on_select.call(Some(go_id.clone()))
+                                                >
+                                                    <span class="session-item-title">{item.title.clone()}</span>
+                                                    <span class="session-item-meta">
+                                                        {(!ticker.is_empty()).then(|| view! { <b>{ticker.clone()}</b> })}
+                                                        <span>{time.clone()}</span>
+                                                    </span>
+                                                </button>
+                                                <button
+                                                    class="session-item-delete"
+                                                    title="删除这条研究记录"
+                                                    aria-label=format!("删除研究记录 {title}")
+                                                    on:click=move |ev| {
+                                                        ev.stop_propagation();
+                                                        let id = del_id.clone();
+                                                        confirm_destructive(
+                                                            "删除研究记录",
+                                                            "这条研究会话的全部问答与证据将被删除，无法恢复。",
+                                                            "删除记录",
+                                                            Callback::new(move |_| on_delete.call(id.clone())),
+                                                        );
+                                                    }
+                                                ><Icon name="trash" /></button>
+                                            </div>
                                         }
-                                    ><Icon name="trash" /></button>
-                                </div>
+                                    }).collect_view()}
+                                </section>
                             }
                         }).collect_view()
                     }
@@ -1175,7 +1468,7 @@ pub fn ResearchPage(
     let on_persisted = Callback::new(move |_| sessions.refetch());
     let on_activity = Callback::new(move |_| activity.update(|value| *value += 1));
 
-    // 新消息与流式增量到达时让阅读位置跟到最新内容；用户向上翻历史时不打扰。
+    // 新消息与一轮终态到达时让阅读位置跟到最新内容；逐字增量不滚动，避免整页持续上移。
     #[cfg(target_arch = "wasm32")]
     {
         let scroll_target = conversation_ref;
@@ -1184,11 +1477,12 @@ pub fn ResearchPage(
             let _ = activity.get();
             // 新增一轮时强制贴底（用户刚提交，必须看到自己的消息）。
             let force = previous.is_some_and(|count| turn_count > count);
-            request_animation_frame(move || {
-                if let Some(node) = scroll_target.get_untracked() {
-                    follow_bottom(&node, force);
-                }
-            });
+            // 节点在 effect 内取出——此刻组件一定还活着。rAF 回调只持有这个 DOM 引用，
+            // 不再回头读 NodeRef：回调可能在本组件卸载之后才执行（提交完立刻切到设置页
+            // 就会这样），那时信号已随作用域释放，读它会 panic「already been disposed」。
+            if let Some(node) = scroll_target.get_untracked() {
+                request_animation_frame(move || follow_bottom(&node, force));
+            }
             turn_count
         });
     }
@@ -1261,6 +1555,11 @@ pub fn ResearchPage(
         ("英伟达", "NVDA", "英伟达的护城河能维持多久？"),
         ("阿里巴巴", "9988.HK", "什么会证伪阿里巴巴的复苏？"),
     ];
+    let followups = [
+        "现在最值得关注的三个信号是什么？",
+        "什么情况会证伪当前判断？",
+        "用更简洁的结论总结一下。",
+    ];
 
     view! {
         <div class="research-shell">
@@ -1297,10 +1596,15 @@ pub fn ResearchPage(
                         <div class="echo-empty">
                             <EchoArt class="hero-echo-art" />
                             <div class="hero-heading-row">
+                                <p class="hero-kicker"><span aria-hidden="true"></span>"ECHO INTELLIGENCE"</p>
                                 <h1>
-                                    <span class="line-1">"让每一个判断，"</span>
-                                    <span class="line-2">"都有证据。"</span>
+                                    <span class="line-1">"让复杂信息，"</span>
+                                    <span class="line-2">"收敛成清晰判断。"</span>
                                 </h1>
+                                <p class="hero-copy">"从公司、估值、风险或证伪开始提问。ECHO 会连接可核验的数据与来源，给出有边界的研究答案。"</p>
+                                <div class="hero-trust-row" aria-label="研究能力">
+                                    <span>"实时行情"</span><i></i><span>"原始披露"</span><i></i><span>"数字护栏"</span>
+                                </div>
                             </div>
                             // 空态只留一层脚手架：标题 + 四个真实可点的研究入口。
                             // 原来的「研究主题」快捷词（"分析这家公司的…"）没有主体，
@@ -1314,14 +1618,12 @@ pub fn ResearchPage(
                                                 <button
                                                     class="company-card"
                                                     aria-label=format!("研究 {name} {ticker}：{prompt}")
+                                                    // 卡片写着"开始研究"就必须真的开始研究。此前只把问题填进
+                                                    // 输入框，用户还得再点一次发送——标签承诺与行为不符。
                                                     on:click=move |_| {
                                                         set_subject.set(ticker.to_string());
                                                         set_question.set(prompt.to_string());
-                                                        #[cfg(target_arch = "wasm32")]
-                                                        if let Some(node) = composer_ref.get_untracked() {
-                                                            let _ = node.focus();
-                                                            autosize(&node);
-                                                        }
+                                                        submit();
                                                     }
                                                 >
                                                     <span class="company-card-head">
@@ -1363,56 +1665,33 @@ pub fn ResearchPage(
                                     view! {
                                         // user bubble——问题为主体，研究对象作为小标签而不是拼接文本
                                         <div class="message user">
-                                            <div class="bubble">
-                                                {move || {
-                                                    let label = turn.ticker.get();
-                                                    (!label.is_empty()).then(|| view! {
-                                                        <span class="bubble-ticker">{label}</span>
-                                                    })
-                                                }}
-                                                <p class="bubble-text">{turn.question.get_value()}</p>
+                                            <div class="user-message-stack">
+                                                <span class="message-author">"我的问题"</span>
+                                                <div class="bubble">
+                                                    {move || {
+                                                        let label = turn.ticker.get();
+                                                        (!label.is_empty()).then(|| view! {
+                                                            <span class="bubble-ticker">{label}</span>
+                                                        })
+                                                    }}
+                                                    <p class="bubble-text">{turn.question.get_value()}</p>
+                                                </div>
                                             </div>
                                         </div>
                                         // assistant card
-                                        <div class="message">
-                                            <div class="bubble assistant-bubble">
-                                                {move || match turn.status.get() {
-                                                    TurnStatus::Streaming {
-                                                        stage, meta_completeness,
-                                                        meta_sources, delta_text, guard, ..
-                                                    } => view! {
-                                                        <StreamingCard
-                                                            stage=stage
-                                                            meta_completeness=meta_completeness
-                                                            meta_sources_len=meta_sources.len()
-                                                            delta_text=delta_text
-                                                            guard=guard
-                                                        />
-                                                    }.into_view(),
-                                                    TurnStatus::Done(response) => view! {
-                                                        <DoneCard res=response on_regenerate=on_retry />
-                                                    }.into_view(),
-                                                    TurnStatus::CompareDone(response) => view! {
-                                                        <CompareCard res=*response on_regenerate=on_retry />
-                                                    }.into_view(),
-                                                    TurnStatus::Archived(archived) => view! {
-                                                        <HistoryCard turn=*archived />
-                                                    }.into_view(),
-                                                    TurnStatus::Failed(message) => view! {
-                                                        <RetryableMessage
-                                                            message=message
-                                                            cancelled=false
-                                                            on_retry=on_retry
-                                                        />
-                                                    }.into_view(),
-                                                    TurnStatus::Cancelled => view! {
-                                                        <RetryableMessage
-                                                            message=String::new()
-                                                            cancelled=true
-                                                            on_retry=on_retry
-                                                        />
-                                                    }.into_view(),
-                                                }}
+                                        <div class="message assistant">
+                                            <div class="assistant-message">
+                                                <div class="assistant-identity">
+                                                    <span class="assistant-avatar"><EchoMark /></span>
+                                                    <span>
+                                                        <strong>"ECHO"</strong>
+                                                        <small>"RESEARCH INTELLIGENCE"</small>
+                                                    </span>
+                                                    <i aria-hidden="true"></i>
+                                                </div>
+                                                <div class="bubble assistant-bubble">
+                                                    <TurnBody turn=turn on_retry=on_retry />
+                                                </div>
                                             </div>
                                         </div>
                                     }
@@ -1427,7 +1706,30 @@ pub fn ResearchPage(
             // 里面只有一个输入框和一个按钮：没有研究对象选择器（主体由服务端识别）、
             // 没有第二条提交通道、没有快捷键说明和免责小字。
             <div class="composer">
+                {move || (has_thread() && !subject.get().is_empty()).then(|| view! {
+                    <div class="composer-suggestions" aria-label="快捷追问">
+                        {followups.into_iter().map(|prompt| view! {
+                            <button
+                                disabled=pending
+                                on:click=move |_| {
+                                    set_question.set(prompt.to_string());
+                                    submit();
+                                }
+                            >{prompt}</button>
+                        }).collect_view()}
+                    </div>
+                })}
                 <div class="composer-panel">
+                    {move || {
+                        let current = subject.get();
+                        (!current.is_empty()).then(|| view! {
+                            <div class="composer-context">
+                                <span aria-hidden="true"></span>
+                                <b>{current}</b>
+                                <small>"当前研究主题"</small>
+                            </div>
+                        })
+                    }}
                     <textarea
                         node_ref=composer_ref
                         prop:value=question
@@ -1444,7 +1746,11 @@ pub fn ResearchPage(
                                 submit();
                             }
                         }
-                        placeholder="问一个关于公司的问题"
+                        placeholder=move || if subject.get().is_empty() {
+                            "输入公司、代码或你想研究的问题".to_string()
+                        } else {
+                            format!("继续追问 {}…", subject.get())
+                        }
                         aria-label="研究问题"
                         rows="1"
                     />

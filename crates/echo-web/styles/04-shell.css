@@ -13,6 +13,22 @@
   height: 100dvh;
   overflow: hidden;
   background: transparent;
+  animation: workspaceSpringIn 620ms cubic-bezier(0.2, 0.9, 0.25, 1.06) both;
+}
+
+@keyframes workspaceSpringIn {
+  0% {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  76% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* ── 顶栏：毛玻璃 ───────────────────────────────────────────────────── */
@@ -21,13 +37,13 @@
   z-index: 30;
   display: flex;
   align-items: center;
-  gap: var(--sp-6);
+  gap: var(--sp-7);
   padding: 0 var(--gutter);
   border-bottom: 1px solid var(--glass-line);
   background: var(--glass);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
-  box-shadow: var(--glass-sheen);
+  box-shadow: var(--glass-sheen), 0 8px 30px -26px rgba(23, 70, 120, 0.42);
 }
 
 /* ── 品牌 ───────────────────────────────────────────────────────────── */
@@ -42,15 +58,15 @@
 }
 
 .topbar-brand:hover {
-  opacity: 0.7;
+  opacity: 0.76;
 }
 
 .echo-brand-mark {
   display: grid;
   place-items: center;
   flex: none;
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
 }
 
 .echo-mark-svg {
@@ -66,7 +82,7 @@
 
 .echo-brand-name {
   color: var(--ink-1);
-  font-size: var(--fs-14);
+  font-size: var(--fs-15);
   font-weight: 700;
   letter-spacing: 0.14em;
   line-height: 1;
@@ -87,13 +103,15 @@
 .workspace-nav {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--sp-1);
   min-width: 0;
-  margin-left: var(--sp-4);
-  padding: 3px;
+  margin-left: var(--sp-6);
+  padding: 4px;
   overflow-x: auto;
-  border-radius: var(--r-md);
-  background: var(--glass-track);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: var(--r-full);
+  background: rgba(226, 234, 243, 0.68);
+  box-shadow: inset 0 1px 2px rgba(14, 48, 82, 0.05);
   scrollbar-width: none;
 }
 
@@ -104,13 +122,13 @@
 .nav-item {
   display: inline-flex;
   align-items: center;
-  height: 28px;
-  padding: 0 var(--sp-4);
+  height: 32px;
+  padding: 0 var(--sp-5);
   color: var(--ink-3);
   font-size: var(--fs-13);
   font-weight: 550;
   white-space: nowrap;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-full);
   transition:
     color var(--dur-1) linear,
     background-color var(--dur-2) var(--ease-out),
@@ -124,8 +142,21 @@
 .nav-item.is-active {
   color: var(--brand-ink);
   font-weight: 600;
-  background: var(--paper-raised);
-  box-shadow: var(--glass-lift);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 3px 10px rgba(20, 62, 108, 0.10), var(--glass-sheen);
+  animation: navSpring 340ms cubic-bezier(0.2, 0.9, 0.25, 1.08) both;
+}
+
+@keyframes navSpring {
+  0% {
+    transform: scale(0.965);
+  }
+  74% {
+    transform: scale(1.008);
+  }
+  100% {
+    transform: none;
+  }
 }
 
 /* ── 顶栏右侧 ───────────────────────────────────────────────────────── */
@@ -148,7 +179,8 @@
   width: var(--ctl-md);
   height: var(--ctl-md);
   color: var(--ink-3);
-  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  border-radius: var(--r-full);
   transition: color var(--dur-1) linear, background-color var(--dur-1) linear;
 }
 
@@ -159,7 +191,8 @@
 
 .notification-button:hover {
   color: var(--ink-1);
-  background: var(--paper-sunken);
+  border-color: var(--line-1);
+  background: rgba(255, 255, 255, 0.82);
 }
 
 .notification-button > span {
@@ -191,13 +224,22 @@
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   box-shadow: var(--e-pop), var(--glass-sheen);
-  animation: popoverIn var(--dur-2) var(--ease-out) both;
+  transform-origin: top right;
+  animation: popoverIn 360ms cubic-bezier(0.16, 1.26, 0.3, 1) both;
 }
 
 @keyframes popoverIn {
-  from {
+  0% {
     opacity: 0;
-    transform: translateY(-4px) scale(0.985);
+    transform: translateY(-8px) scale(0.94);
+  }
+  72% {
+    opacity: 1;
+    transform: translateY(2px) scale(1.012);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
   }
 }
 
@@ -248,33 +290,52 @@
   display: inline-flex;
   align-items: center;
   gap: var(--sp-3);
-  height: var(--ctl-md);
-  padding: 0 var(--sp-2) 0 var(--sp-1);
+  height: 42px;
+  padding: 0 var(--sp-3) 0 var(--sp-1);
+  border: 1px solid transparent;
   border-radius: var(--r-full);
   transition: background-color var(--dur-1) linear;
 }
 
 .account-card:hover,
 .account-card.is-open {
-  background: var(--paper-sunken);
+  border-color: var(--line-1);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: var(--e-1);
 }
 
 .user-avatar {
+  position: relative;
   display: grid;
   place-items: center;
   flex: none;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   color: var(--brand-800);
   font-size: var(--fs-12);
   font-weight: 700;
   letter-spacing: 0.02em;
   border-radius: var(--r-full);
-  background: var(--brand-100);
+  background: linear-gradient(145deg, #e8f4ff, #cfe8ff);
+  box-shadow: inset 0 0 0 1px rgba(22, 131, 248, 0.10);
+}
+
+.user-avatar::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  height: 8px;
+  content: "";
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  background: #34c759;
+  box-shadow: 0 1px 4px rgba(25, 96, 52, 0.24);
 }
 
 .account-copy {
   display: grid;
+  gap: 1px;
   text-align: left;
 }
 
@@ -284,6 +345,17 @@
   color: var(--ink-1);
   font-size: var(--fs-13);
   font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-copy small {
+  max-width: 17ch;
+  overflow: hidden;
+  color: var(--ink-4);
+  font-size: 10px;
+  font-weight: 500;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -302,30 +374,170 @@
 
 .account-menu {
   display: grid;
-  min-width: 200px;
+  width: min(340px, calc(100vw - 2 * var(--gutter)));
   padding: var(--sp-2);
 }
 
-.account-menu button {
-  padding: var(--sp-3) var(--sp-3);
+.account-menu-profile {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--line-1);
+}
+
+.account-menu-profile .user-avatar {
+  width: 44px;
+  height: 44px;
+  font-size: var(--fs-14);
+  box-shadow:
+    inset 0 0 0 1px rgba(22, 131, 248, 0.10),
+    0 8px 20px -14px rgba(20, 104, 187, 0.52);
+}
+
+.account-menu-profile > span:last-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.account-menu-profile strong {
+  overflow: hidden;
+  color: var(--ink-1);
+  font-size: var(--fs-14);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-menu-profile small {
+  overflow: hidden;
+  color: var(--ink-4);
+  font-size: var(--fs-12);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-subscription {
+  display: grid;
+  gap: var(--sp-2);
+  margin: var(--sp-2);
+  padding: var(--sp-4);
+  overflow: hidden;
+  border: 1px solid rgba(68, 158, 246, 0.12);
+  border-radius: var(--r-md);
+  background:
+    radial-gradient(160px 90px at 100% 0%, rgba(104, 186, 255, 0.20), transparent 70%),
+    linear-gradient(145deg, rgba(238, 247, 255, 0.94), rgba(249, 252, 255, 0.92));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.subscription-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.subscription-heading > span {
+  color: var(--ink-4);
+  font-size: var(--fs-11);
+  font-weight: 550;
+}
+
+.account-subscription > strong {
+  color: var(--ink-1);
+  font-size: var(--fs-18);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.account-subscription > p {
+  color: var(--ink-3);
+  font-size: var(--fs-11);
+  line-height: var(--lh-snug);
+}
+
+.subscription-status {
+  padding: 3px 7px;
+  color: var(--brand-ink);
+  font-size: 10px;
+  font-weight: 650;
+  border-radius: var(--r-full);
+  background: rgba(22, 131, 248, 0.10);
+}
+
+.subscription-status.is-active {
+  color: #16803b;
+  background: rgba(52, 199, 89, 0.12);
+}
+
+.subscription-features {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+}
+
+.subscription-features span {
+  padding: 4px 7px;
+  color: var(--brand-ink);
+  font-size: 10px;
+  font-weight: 550;
+  border: 1px solid rgba(22, 131, 248, 0.10);
+  border-radius: var(--r-full);
+  background: rgba(255, 255, 255, 0.70);
+}
+
+.account-menu-actions {
+  display: grid;
+  gap: 2px;
+  padding-top: var(--sp-2);
+}
+
+.account-menu-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  min-height: 42px;
+  padding: 0 var(--sp-3);
   color: var(--ink-2);
   font-size: var(--fs-14);
   text-align: left;
-  border-radius: var(--r-xs);
+  border-radius: var(--r-sm);
   transition: color var(--dur-1) linear, background-color var(--dur-1) linear;
 }
 
-.account-menu button:hover {
+.account-menu-actions button b {
+  color: var(--ink-4);
+  font-size: var(--fs-13);
+  font-weight: 500;
+}
+
+.account-menu-actions button:hover {
   color: var(--ink-1);
   background: var(--paper-sunken);
 }
 
-.account-menu button.is-danger {
+.account-menu-actions button.is-danger {
   color: var(--danger-ink);
 }
 
-.account-menu button.is-danger:hover {
+.account-menu-actions button.is-danger:hover {
   background: var(--danger-tint);
+}
+
+.account-menu-actions button:disabled {
+  color: var(--ink-4);
+  background: transparent;
+}
+
+.account-menu-error {
+  margin: var(--sp-2) var(--sp-3) var(--sp-1);
+  color: var(--danger-ink);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
 }
 
 /* 菜单/浮层的点击外部关闭遮罩：透明、铺满、位于浮层之下。 */
@@ -342,15 +554,24 @@
   overflow-x: hidden;
 }
 
-/* 页面切换的纸面淡入：只动透明度与 2px 位移，不改变布局尺寸。 */
+/* 页面切换带一点弹性回落，始终只动合成层，不改变布局尺寸。 */
 .workspace-stage > * {
-  animation: stageIn var(--dur-4) var(--ease-out) both;
+  transform-origin: 50% 0;
+  animation: stageIn 460ms cubic-bezier(0.2, 0.9, 0.25, 1.06) both;
 }
 
 @keyframes stageIn {
-  from {
+  0% {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(9px);
+  }
+  76% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
   }
 }
 

@@ -3,7 +3,7 @@ mod operations;
 mod rate_limit;
 mod workspace;
 
-pub use auth::{AuthRepository, AuthSessionRow, NewUser, UserRow};
+pub use auth::{AccountSubscriptionRow, AuthRepository, AuthSessionRow, NewUser, UserRow};
 pub use operations::{
     EarningsCandidateRow, OperationsRepository, PortfolioSnapshotResult, ReminderProfileRow,
     WatchRuleRow,

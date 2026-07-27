@@ -7,7 +7,11 @@
 
 use crate::DecisionPanel;
 use crate::research::PriorTurn;
-use echo_domain::{Evidence, Filing, Financials, MarketSnapshot, ResearchDepth};
+use crate::research_memory::{CompanyMemory, memory_prompt_block};
+use crate::research_orchestrator::ResearchDegradation;
+use echo_domain::{
+    Evidence, Filing, Financials, MarketSnapshot, MultipleType, PeerAnchor, ResearchDepth,
+};
 use rust_decimal::Decimal;
 
 /// 作答上下文——本请求这一家公司的全部已核事实（单一主体，无跨公司泄漏面）。
@@ -117,6 +121,89 @@ pub fn build_user_prompt(ctx: &AnswerContext) -> String {
     out
 }
 
+/// 聊天/报告主链使用的增强提示词：在本轮事实块之后追加显式降级约束与跨会话定性记忆。
+/// 旧记忆不进入 `FactsRegistry`，数字已在 [`memory_prompt_block`] 中遮蔽。
+#[must_use]
+pub fn build_research_user_prompt(
+    ctx: &AnswerContext,
+    memory: Option<&CompanyMemory>,
+    peer_anchor: Option<&PeerAnchor>,
+    degradation: ResearchDegradation,
+) -> String {
+    let mut out = build_user_prompt(ctx);
+    out.push_str(&supplemental_research_context(
+        memory,
+        peer_anchor,
+        degradation,
+    ));
+    out
+}
+
+pub(crate) fn supplemental_research_context(
+    memory: Option<&CompanyMemory>,
+    peer_anchor: Option<&PeerAnchor>,
+    degradation: ResearchDegradation,
+) -> String {
+    let mut out = String::new();
+    if let Some(peer) = peer_anchor {
+        out.push_str(&peer_anchor_block("已核到的同业倍数对照", peer));
+    }
+    match degradation {
+        ResearchDegradation::PeerComparisonOnly => out.push_str(
+            "\n降级规则：本轮公司自身估值未能成立，只回答同业倍数分布与可比性限制；\
+             不给目标价、估值区间或隐含上涨空间。\n",
+        ),
+        ResearchDegradation::QualitativeOnly => out.push_str(
+            "\n降级规则：本轮一手财务仍未核到，只做定性研究并列出待验证项；\
+             不给任何财务数字或估值结论。\n",
+        ),
+        ResearchDegradation::None => {}
+    }
+    out.push_str(&memory_prompt_block(memory));
+    out
+}
+
+pub(crate) fn compare_recovery_context(
+    label: &str,
+    peer_anchor: Option<&PeerAnchor>,
+    degradation: ResearchDegradation,
+) -> String {
+    let mut out = String::new();
+    if let Some(peer) = peer_anchor {
+        out.push_str(&peer_anchor_block(
+            &format!("{label} 已核到的同业倍数对照"),
+            peer,
+        ));
+    }
+    match degradation {
+        ResearchDegradation::PeerComparisonOnly => out.push_str(&format!(
+            "\n{label} 降级规则：自身估值未能成立，只比较同业倍数分布与可比性限制，\
+             不给该公司的目标价、估值区间或隐含上涨空间。\n"
+        )),
+        ResearchDegradation::QualitativeOnly => out.push_str(&format!(
+            "\n{label} 降级规则：一手财务仍未核到，只做定性比较，不给该公司的财务数字或估值结论。\n"
+        )),
+        ResearchDegradation::None => {}
+    }
+    out
+}
+
+fn peer_anchor_block(heading: &str, peer: &PeerAnchor) -> String {
+    let multiple = match peer.multiple_type {
+        MultipleType::Pe => "PE",
+        MultipleType::EvSales => "EV/Sales",
+    };
+    format!(
+        "\n\n== {heading} ==\n\
+         {multiple} 分位：p25 {}x / 中位 {}x / p75 {}x；样本公司（{}）。\n\
+         这些数字只描述同业分布；公司自身估值基数缺失时，不得据此反推目标价。\n",
+        peer.p25,
+        peer.median,
+        peer.p75,
+        peer.tickers.join("、")
+    )
+}
+
 /// 单公司「已核到的事实」块——`build_user_prompt` 与深度报告提示词（`report.rs`）共用同一份
 /// 事实格式化，确保报告引用的数字与聊天回答核对同一份 `FactsRegistry`，不会各拼一套口径。
 pub(crate) fn facts_block(ctx: &AnswerContext) -> String {
@@ -171,12 +258,22 @@ pub(crate) fn facts_block(ctx: &AnswerContext) -> String {
     if let Some(hv) = &ctx.financials.historical_valuation {
         out.push_str("\n\n== 已核到的历史估值分位（近5年月度PE，仅美股）==\n");
         out.push_str(&format!("当前分位：{}\n", field(hv.percentile, "%")));
+        out.push_str(&format!("当前倍数：{}\n", field(hv.latest, "x")));
+        // p25/中位/p75 是估值「历史 PE 分位」法的锚点，必须逐个给出具体倍数：估值假设行里
+        // 会提到这三个分位，事实块若只给 min/max/median，模型想引用 p25/p75 时无数可依，
+        // 就会自己凑一个近似值（实测 GOOGL 中位 28.12x 被写成 28.17x，直接触发护栏硬失败）。
         out.push_str(&format!(
-            "历史区间：{} ~ {}（中位 {}）\n",
-            field(hv.min, "x"),
-            field(hv.max, "x"),
-            field(hv.median, "x")
+            "四分位：p25 {} / 中位 {} / p75 {}\n",
+            field(hv.p25, "x"),
+            field(hv.median, "x"),
+            field(hv.p75, "x")
         ));
+        out.push_str(&format!(
+            "历史区间：{} ~ {}\n",
+            field(hv.min, "x"),
+            field(hv.max, "x")
+        ));
+        out.push_str("引用上述任一倍数时必须原样照抄，不得四舍五入或换算。\n");
     }
 
     if !ctx.filings.is_empty() {

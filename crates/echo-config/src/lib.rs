@@ -8,7 +8,7 @@ const DEFAULT_API_PORT: u16 = 4180;
 const DEFAULT_DB_CONNECTIONS: u32 = 5;
 /// Trunk 开发代理默认来源（`crates/echo-web/Trunk.toml` 把 `/api` 代到 4180，浏览器侧 Origin
 /// 仍是 5191）；生产部署必须显式设置 `ECHO_ALLOWED_ORIGINS` 覆盖。
-const DEFAULT_ALLOWED_ORIGIN: &str = "http://localhost:5191";
+const DEFAULT_ALLOWED_ORIGINS: [&str; 2] = ["http://localhost:5191", "http://127.0.0.1:5191"];
 const DEFAULT_ASK_RATE_LIMIT_PER_MINUTE: u32 = 20;
 
 /// 外部数据源配置。所有密钥只在进程组合根读取，再显式注入数据层。
@@ -17,6 +17,8 @@ const DEFAULT_ASK_RATE_LIMIT_PER_MINUTE: u32 = 20;
 pub struct DataSourceConfig {
     pub finnhub_api_key: Option<String>,
     pub fmp_api_key: Option<String>,
+    /// SEC 要求请求方使用可联系的 User-Agent；未配置时不启用 Company Facts 官方补救源。
+    pub sec_user_agent: Option<String>,
     /// 网页证据供应商 key——consumer 是 `echo-data::EvidenceService`，双供应商：配了 `EXA_API_KEY`
     /// 优先走 Exa（语义检索，有可用月度免费额度），否则回落 `TAVILY_API_KEY`。免费/研究档不算
     /// 商用授权，故 `commercial_mode` 下证据端口自行拒绝（见该服务）。
@@ -33,6 +35,7 @@ impl DataSourceConfig {
         Self {
             finnhub_api_key: non_empty(lookup("FINNHUB_API_KEY")),
             fmp_api_key: non_empty(lookup("FMP_API_KEY")),
+            sec_user_agent: non_empty(lookup("SEC_USER_AGENT")),
             exa_api_key: non_empty(lookup("EXA_API_KEY")),
             tavily_api_key: non_empty(lookup("TAVILY_API_KEY")),
             commercial_mode: flag(non_empty(lookup("ECHO_COMMERCIAL_MODE"))),
@@ -188,7 +191,12 @@ impl ApiConfig {
         let data_sources = DataSourceConfig::from_lookup(&mut lookup);
         let model_provider = ModelProviderConfig::from_lookup(&mut lookup);
         let allowed_origins = non_empty(lookup("ECHO_ALLOWED_ORIGINS")).map_or_else(
-            || vec![DEFAULT_ALLOWED_ORIGIN.to_string()],
+            || {
+                DEFAULT_ALLOWED_ORIGINS
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            },
             |value| {
                 value
                     .split(',')
@@ -320,7 +328,10 @@ mod tests {
         assert_eq!(config.max_connections, 5);
         assert!(!config.auth_disabled);
         assert!(!config.secure_cookie);
-        assert_eq!(config.allowed_origins, vec!["http://localhost:5191"]);
+        assert_eq!(
+            config.allowed_origins,
+            vec!["http://localhost:5191", "http://127.0.0.1:5191"]
+        );
         assert_eq!(config.ask_rate_limit_per_minute, 20);
     }
 

@@ -8,6 +8,7 @@ mod icons;
 mod markdown;
 mod profiles;
 mod research;
+mod theme;
 mod workspace;
 
 use dialog::{ConfirmHost, provide_confirm};
@@ -19,6 +20,10 @@ use workspace::{LoginPage, Workspace};
 pub fn App() -> impl IntoView {
     // 破坏性操作的确认通道在根注入，任何层级的组件都能发起，宿主只有一个。
     provide_confirm();
+    // 外观在根注入并立即应用：晚一帧应用会让深色用户先闪一下白底。
+    let theme = create_rw_signal(theme::load());
+    theme::apply(theme.get_untracked());
+    provide_context(theme);
     let (auth_epoch, set_auth_epoch) = create_signal(0u64);
     let auth = create_resource(
         move || auth_epoch.get(),

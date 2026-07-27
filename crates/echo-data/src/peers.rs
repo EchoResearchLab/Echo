@@ -236,14 +236,12 @@ fn band(mut values: Vec<(String, Decimal)>) -> Option<PeerBand> {
     }
     values.sort_by(|a, b| a.1.cmp(&b.1));
     let n = values.len();
-    let at = |p: f64| -> Decimal {
-        let index = ((p * (n - 1) as f64).round() as usize).min(n - 1);
-        values[index].1
-    };
+    let sorted: Vec<Decimal> = values.iter().map(|(_, value)| *value).collect();
+    let (p25, median, p75) = crate::stats::quartiles_sorted(&sorted)?;
     Some(PeerBand {
-        p25: at(0.25),
-        median: at(0.5),
-        p75: at(0.75),
+        p25,
+        median,
+        p75,
         n,
         tickers: values.into_iter().map(|(ticker, _)| ticker).collect(),
     })
@@ -275,6 +273,34 @@ mod tests {
     #[test]
     fn band_needs_at_least_two_positive_values() {
         assert!(band(vec![("A".into(), dec!(10))]).is_none());
+    }
+
+    /// 小样本不得让相邻分位塌到同一个值——那会把"可比公司太少"伪装成"同业估值高度一致"。
+    /// 免费档可比集就是 3–5 家，取整分位在 n=3（p25==中位）和 n=4（中位==p75）时必然退化。
+    #[test]
+    fn small_peer_sets_still_spread_across_quartiles() {
+        let four = band(vec![
+            ("A".into(), dec!(10)),
+            ("B".into(), dec!(20)),
+            ("C".into(), dec!(30)),
+            ("D".into(), dec!(40)),
+        ])
+        .expect("band");
+        assert_eq!(four.p25, dec!(17.5));
+        assert_eq!(four.median, dec!(25));
+        assert_eq!(four.p75, dec!(32.5));
+        assert!(four.p25 < four.median && four.median < four.p75);
+
+        let three = band(vec![
+            ("A".into(), dec!(10)),
+            ("B".into(), dec!(20)),
+            ("C".into(), dec!(30)),
+        ])
+        .expect("band");
+        assert_eq!(three.p25, dec!(15));
+        assert_eq!(three.median, dec!(20));
+        assert_eq!(three.p75, dec!(25));
+        assert!(three.p25 < three.median && three.median < three.p75);
     }
 
     #[test]

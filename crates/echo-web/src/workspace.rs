@@ -3,7 +3,7 @@ use crate::format;
 use crate::icons::{EchoArt, EchoMark, Icon};
 use crate::{api, profiles::ProfilesSection, research::ResearchPage};
 use echo_contracts::{
-    AuthLoginRequest, AuthLogoutResponse, AuthRegisterRequest, AuthUserResponse,
+    AccountResponse, AuthLoginRequest, AuthLogoutResponse, AuthRegisterRequest, AuthUserResponse,
     ChangedCountResponse, Decimal, DeskResponse, MutationResponse, NotificationReadRequest,
     NotificationsListResponse, PortfolioListResponse, PortfolioUpsertRequest, PreferencesResponse,
     PreferencesUpdateRequest, PublicUser, UnreadResponse, WatchListResponse, WatchMutationRequest,
@@ -194,6 +194,15 @@ fn user_initials(name: &str) -> String {
     name.chars().take(2).flat_map(char::to_uppercase).collect()
 }
 
+fn subscription_status_label(status: &str) -> &'static str {
+    match status {
+        "active" => "已订阅",
+        "trialing" => "试用中",
+        "canceled" => "已取消",
+        _ => "订阅信息",
+    }
+}
+
 #[component]
 pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoView {
     let (page, set_page) = create_signal(initial_page());
@@ -213,6 +222,10 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
     let logout = create_action(|_: &()| async {
         api::post::<_, AuthLogoutResponse>("/api/auth/logout", &serde_json::json!({})).await
     });
+    let account = create_resource(
+        || (),
+        |_| async { api::get::<AccountResponse>("/api/account").await },
+    );
     create_effect(move |_| {
         if matches!(logout.value().get(), Some(Ok(_))) {
             on_auth_changed.call(());
@@ -224,6 +237,7 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
         .unwrap_or_else(|| user.username.clone());
     let avatar_letters = user_initials(&display_name);
     let account_name = display_name.clone();
+    let account_username = user.username.clone();
     let on_research_navigate = Callback::new(move |session_id: Option<String>| {
         navigate(set_page, Page::Research(ResearchEntry::session(session_id)))
     });
@@ -280,17 +294,86 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
                             // 不改变用户能做什么，是纯装饰。
                             <span class="account-copy">
                                 <strong>{account_name.clone()}</strong>
+                                <small>{move || {
+                                    account
+                                        .get()
+                                        .and_then(Result::ok)
+                                        .and_then(|response| response.subscription)
+                                        .map(|subscription| format!(
+                                            "{} · {}",
+                                            subscription.plan_name,
+                                            subscription_status_label(&subscription.status)
+                                        ))
+                                        .unwrap_or_else(|| "ECHO 会员".to_string())
+                                }}</small>
                             </span>
                             <span class="account-chevron" aria-hidden="true"><Icon name="chevron-down" /></span>
                         </button>
                         {move || account_open.get().then(|| view! {
                             <div class="dismiss-layer" on:click=move |_| set_account_open.set(false)></div>
                             <div class="account-menu" role="menu">
-                                <button role="menuitem" on:click=move |_| {
-                                    set_account_open.set(false);
-                                    navigate(set_page, Page::Settings);
-                                }>"通知与偏好设置"</button>
-                                <button class="is-danger" role="menuitem" on:click=move |_| logout.dispatch(())>"退出登录"</button>
+                                <div class="account-menu-profile">
+                                    <span class="user-avatar" aria-hidden="true">{avatar_letters.clone()}</span>
+                                    <span>
+                                        <strong>{account_name.clone()}</strong>
+                                        <small>{account_username.clone()}</small>
+                                    </span>
+                                </div>
+                                {move || {
+                                    account
+                                        .get()
+                                        .and_then(Result::ok)
+                                        .and_then(|response| response.subscription)
+                                        .map(|subscription| {
+                                            let status_class =
+                                                format!("subscription-status is-{}", subscription.status);
+                                            let status =
+                                                subscription_status_label(&subscription.status);
+                                            let period_end =
+                                                format::timestamp(&subscription.current_period_end);
+                                            view! {
+                                                <div class="account-subscription">
+                                                    <div class="subscription-heading">
+                                                        <span>"当前订阅"</span>
+                                                        <b class=status_class>{status}</b>
+                                                    </div>
+                                                    <strong>{subscription.plan_name}</strong>
+                                                    <p>{format!(
+                                                        "有效期至 {period_end} · 每日 {} 次研究调用",
+                                                        subscription.max_daily_calls
+                                                    )}</p>
+                                                    <div class="subscription-features">
+                                                        {subscription
+                                                            .features
+                                                            .into_iter()
+                                                            .take(4)
+                                                            .map(|feature| view! { <span>{feature}</span> })
+                                                            .collect_view()}
+                                                    </div>
+                                                </div>
+                                            }
+                                        })
+                                }}
+                                <div class="account-menu-actions">
+                                    <button role="menuitem" on:click=move |_| {
+                                        set_account_open.set(false);
+                                        navigate(set_page, Page::Settings);
+                                    }>
+                                        <span>"通知与偏好"</span><b aria-hidden="true">"→"</b>
+                                    </button>
+                                    <button
+                                        class="is-danger account-logout"
+                                        role="menuitem"
+                                        disabled=move || logout.pending().get()
+                                        on:click=move |_| logout.dispatch(())
+                                    >
+                                        <span>{move || if logout.pending().get() { "正在安全退出…" } else { "退出当前账号" }}</span>
+                                        <b aria-hidden="true">"↗"</b>
+                                    </button>
+                                </div>
+                                {move || logout.value().get().and_then(Result::err).map(|message| view! {
+                                    <p class="account-menu-error" role="alert">{message}</p>
+                                })}
                             </div>
                         })}
                     </div>
@@ -328,6 +411,24 @@ struct AuthSubmission {
     display_name: String,
 }
 
+#[cfg(target_arch = "wasm32")]
+fn finish_auth_transition(callback: Callback<()>) {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::prelude::Closure;
+
+    let closure = Closure::once(move || callback.call(()));
+    let _ = leptos::window().set_timeout_with_callback_and_timeout_and_arguments_0(
+        closure.as_ref().unchecked_ref(),
+        560,
+    );
+    closure.forget();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn finish_auth_transition(callback: Callback<()>) {
+    callback.call(());
+}
+
 #[component]
 pub fn LoginPage(on_authenticated: Callback<()>) -> impl IntoView {
     let (register, set_register) = create_signal(false);
@@ -336,6 +437,7 @@ pub fn LoginPage(on_authenticated: Callback<()>) -> impl IntoView {
     let (password_visible, set_password_visible) = create_signal(false);
     let (invite, set_invite) = create_signal(String::new());
     let (display_name, set_display_name) = create_signal(String::new());
+    let (transitioning, set_transitioning) = create_signal(false);
     let submit = create_action(|input: &AuthSubmission| {
         let input = input.clone();
         async move {
@@ -364,8 +466,9 @@ pub fn LoginPage(on_authenticated: Callback<()>) -> impl IntoView {
         }
     });
     create_effect(move |_| {
-        if matches!(submit.value().get(), Some(Ok(_))) {
-            on_authenticated.call(());
+        if matches!(submit.value().get(), Some(Ok(_))) && !transitioning.get_untracked() {
+            set_transitioning.set(true);
+            finish_auth_transition(on_authenticated);
         }
     });
     let can_submit = create_memo(move |_| {
@@ -396,19 +499,20 @@ pub fn LoginPage(on_authenticated: Callback<()>) -> impl IntoView {
     };
 
     view! {
-        <main class="auth-page">
+        <main class=move || if transitioning.get() { "auth-page is-leaving" } else { "auth-page" }>
+            <div class="auth-brand-lockup">
+                <span class="echo-brand-mark auth-mark"><EchoMark /></span>
+                <span><strong>"ECHO"</strong><small>"RESEARCH INTELLIGENCE"</small></span>
+            </div>
             <section class="auth-story">
                 <EchoArt class="auth-echo-art" />
-                <div class="auth-brand-lockup">
-                    <span class="echo-brand-mark auth-mark"><EchoMark /></span>
-                    <span><strong>"ECHO"</strong><small>"RESEARCH"</small></span>
+                <div class="auth-story-inner">
+                    <h1>"听见数据背后，"<br/><em>"真正重要的答案。"</em></h1>
+                    <p class="auth-story-copy">"把实时行情、原始披露、财务数据与研究上下文连成一条可验证的证据链，让每一次判断更清晰、更有依据。"</p>
                 </div>
-                <p class="auth-brand-line"><span></span>"EVIDENCE-FIRST INTELLIGENCE"</p>
-                <h1>"把市场噪音，"<br/><em>"变成清晰判断。"</em></h1>
-                <p class="auth-story-copy">"面向美股与港股科技公司的研究工作台。事实、估值、风险与证伪，沉淀为一条可复盘的证据链。"</p>
             </section>
             <form
-                class="auth-card"
+                class=move || if transitioning.get() { "auth-card is-success" } else { "auth-card" }
                 aria-label=move || if register.get() { "邀请码注册" } else { "账户登录" }
                 on:submit=move |event| {
                     event.prevent_default();
@@ -416,7 +520,8 @@ pub fn LoginPage(on_authenticated: Callback<()>) -> impl IntoView {
                 }
             >
                 <div class="auth-card-head">
-                    <h2>{move || if register.get() { "创建研究空间" } else { "欢迎回来" }}</h2>
+                    <p class="auth-card-kicker">{move || if register.get() { "JOIN ECHO" } else { "WELCOME BACK" }}</p>
+                    <h2>{move || if register.get() { "创建研究空间" } else { "登录 ECHO 工作区" }}</h2>
                 </div>
                 <div class="auth-tabs" role="tablist" aria-label="账户入口">
                     <button
@@ -558,10 +663,10 @@ pub fn LoginPage(on_authenticated: Callback<()>) -> impl IntoView {
                         }
                     }}
                 </button>
-                // 登录页只留一句必要说明：这是邀请制工作区，忘记密码只能找管理员。
-                // 其余「私人工作区 / 记录仅账户内可见」之类的话不改变用户的任何操作。
-                {move || (!register.get()).then(|| view! {
-                    <p class="auth-help">"邀请制工作区，忘记密码请联系管理员重置。"</p>
+                {move || transitioning.get().then(|| view! {
+                    <span class="auth-success-bloom" aria-hidden="true">
+                        <Icon name="check" />
+                    </span>
                 })}
             </form>
         </main>
@@ -1330,6 +1435,12 @@ fn SettingsPage() -> impl IntoView {
             // 页头已经说清这页是干什么的；再放一条"通知由你掌控 / 保存后立即生效"的
             // 横幅只是把同一句话说第二遍。
             <div class="settings-grid">
+                <section class="settings-card">
+                    <div class="settings-card-head"><h2>"外观"</h2></div>
+                    <p class="muted">"跟随系统会随你的操作系统在日夜之间切换。"</p>
+                    {use_context::<RwSignal<crate::theme::Theme>>()
+                        .map(|theme| view! { <crate::theme::ThemePicker theme=theme /> })}
+                </section>
                 <section class="settings-card settings-delivery-card">
                     <div class="settings-card-head"><h2>"通知类型"</h2></div>
                     <Toggle icon="clock" label="盘前 / 盘后摘要" detail="每天汇总市场与自选公司变化" value=notify_digest set_value=set_notify_digest />

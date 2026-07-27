@@ -71,6 +71,8 @@ reqwest = { version = "0.12", default-features = false, features = [
     "stream",
 ] }
 url = "2"
+regex = "1"
+pdf-extract = "=0.10.0"
 fantoccini = { version = "0.22", default-features = false, features = ["rustls-tls"] }
 # 每请求 tracing span（OTLP 追踪导出的数据来源，见 echo-observability）。
 tower-http = { version = "0.6", default-features = false, features = ["trace"] }

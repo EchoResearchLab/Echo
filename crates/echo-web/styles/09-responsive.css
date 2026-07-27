@@ -21,15 +21,23 @@
   .watch-form-grid {
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   }
+
+  .company-showcase {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .company-card {
+    min-height: 154px;
+  }
 }
 
 /* ── ≤900：登录并单栏；研究历史转为抽屉式顶部条 ────────────────────── */
 @media (max-width: 900px) {
   .auth-page {
     grid-template-columns: minmax(0, 1fr);
-    gap: var(--sp-8);
+    gap: var(--sp-10);
     align-content: start;
-    padding: var(--sp-8) var(--gutter) var(--sp-9);
+    padding: 112px var(--gutter) var(--sp-10);
   }
 
   /* 单栏时表单排在前面：回访用户占绝大多数，不该先滚过一屏品牌叙事才能登录。 */
@@ -224,12 +232,26 @@
     max-width: 94%;
   }
 
+  .assistant-bubble > .answer-card {
+    padding: var(--sp-5);
+  }
+
   .val-bands {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* 三档在窄屏改竖排后，横向刻度轴与它们不再一一对应，留着反而误导位置关系。
+     相对现价的空间仍由下方 `.val-upside` 文字给出，信息不丢。 */
+  .val-track {
+    display: none;
+  }
+
   .company-showcase {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .company-card {
+    min-height: 0;
   }
 
   .time-range {

@@ -12,7 +12,7 @@
 //! 与 JS 的实质差异：**零二进制浮点**。选"量级上最接近的事实"原文用 `log10` 距离，这里改用
 //! Decimal 比值 `max(v/f, f/v)` 取最小——同序、且不引入任何浮点（红线 4）。
 
-use crate::valuation::{Financials, MarketSnapshot, Valuation};
+use crate::valuation::{Filing, Financials, MarketSnapshot, PeerAnchor, Valuation};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::{BTreeMap, BTreeSet};
@@ -62,6 +62,10 @@ const AMOUNT_KEYWORDS: &[&str] = &[
     "看空",
     "中性",
     "看多",
+    // 估值区间是现在的主要输出，模型多写成"基准估值区间 234.51"而非登记表里的"估值中性"。
+    // 不收这两个词，裸数字会被整个跳过——连 soft 都不记，等于估值数字完全不受核对。
+    "基准",
+    "估值",
     "市值",
     "收入",
     "营收",
@@ -192,6 +196,12 @@ impl FactsRegistry {
     }
 }
 
+/// `pct_string` 的逆运算——把 `"-27.8%"` 解回 `-27.8`。估值把空间存成展示字符串，
+/// 登记表要的是数值。解析不出就返回 `None`（不登记好过登错）。
+fn parse_pct(text: Option<&str>) -> Option<Decimal> {
+    text?.trim().trim_end_matches('%').trim().parse().ok()
+}
+
 /// 用户持仓（真实 DB 记录，不用自由文本）。
 #[derive(Clone, Debug, Default)]
 pub struct Position {
@@ -208,7 +218,13 @@ pub struct RegistrySources<'a> {
     pub market: Option<&'a MarketSnapshot>,
     pub financials: Option<&'a Financials>,
     pub valuation: Option<&'a Valuation>,
+    /// 同业倍数在估值失败的降级路径也会直接喂给模型，必须先登记才能允许原样引用。
+    pub peer_anchor: Option<&'a PeerAnchor>,
     pub earnings_next_date: Option<&'a str>,
+    /// 本轮喂给模型的公司公告。事实块明写"可引用表单类型与日期"，登记表就必须收下这些
+    /// 日期——否则模型照着引用反被判"日期查无"的硬失败（实测 AAPL 引用 10-Q 2026-05-01
+    /// 即如此）。这是本文件反复出现的同一条教训：喂出去的每个数字都要能核。
+    pub filings: &'a [Filing],
     pub position: Option<&'a Position>,
 }
 
@@ -272,7 +288,6 @@ pub fn build_facts_registry(sources: &RegistrySources) -> FactsRegistry {
         reg.push_percent(f.return_on_equity, "ROE", "financialsData");
         reg.push_percent(f.return_on_assets, "ROA", "financialsData");
         reg.push_multiple(f.pe, "PE", "financialsData");
-        reg.push_multiple(f.forward_pe, "Forward PE", "financialsData");
         reg.push_multiple(f.pb, "PB", "financialsData");
         reg.push_date(f.period.as_deref(), "财报期", "financialsData.period");
 
@@ -310,29 +325,50 @@ pub fn build_facts_registry(sources: &RegistrySources) -> FactsRegistry {
                 "financialsData.hkBuybacks",
             );
         }
-        // F-5 历史估值分位：分位/区间先登记再允许被引用。
-        if let Some(hv) = &f.historical_valuation {
-            reg.push_percent(
-                hv.percentile,
-                "历史估值分位",
-                "financialsData.historicalValuation",
-            );
-            reg.push_multiple(
-                hv.min,
-                "历史PE区间低值",
-                "financialsData.historicalValuation",
-            );
-            reg.push_multiple(
-                hv.max,
-                "历史PE区间高值",
-                "financialsData.historicalValuation",
-            );
-            reg.push_multiple(
-                hv.median,
-                "历史PE中位",
-                "financialsData.historicalValuation",
-            );
-        }
+    }
+
+    // F-5 历史估值分位——**刻意在三表 `provider_ok` 门控之外**。它来自历史行情 + 年报 EPS，
+    // 与当季三表能否取到毫无关系：三表 429/缺源时这段分位照样有值，事实块也照样把它喂给
+    // 模型（那一段同样不受 provider_ok 约束）。此前登记被门控挡住，于是模型如实照抄分位却
+    // 全被判失败——正是本文件上方那条"喂给模型的数字必须先登记"的 F-4a 教训再犯一次。
+    // p25/p75/latest 是估值「历史 PE 分位」法的锚点，与 min/max/median 一并登记。
+    if let Some(hv) = sources
+        .financials
+        .and_then(|f| f.historical_valuation.as_ref())
+    {
+        reg.push_percent(
+            hv.percentile,
+            "历史估值分位",
+            "financialsData.historicalValuation",
+        );
+        reg.push_multiple(
+            hv.min,
+            "历史PE区间低值",
+            "financialsData.historicalValuation",
+        );
+        reg.push_multiple(
+            hv.max,
+            "历史PE区间高值",
+            "financialsData.historicalValuation",
+        );
+        reg.push_multiple(
+            hv.median,
+            "历史PE中位",
+            "financialsData.historicalValuation",
+        );
+        reg.push_multiple(hv.p25, "历史PE p25", "financialsData.historicalValuation");
+        reg.push_multiple(hv.p75, "历史PE p75", "financialsData.historicalValuation");
+        reg.push_multiple(
+            hv.latest,
+            "历史PE当前倍数",
+            "financialsData.historicalValuation",
+        );
+    }
+
+    if let Some(peer) = sources.peer_anchor {
+        reg.push_multiple(Some(peer.p25), "同业倍数 p25", "peerAnchor");
+        reg.push_multiple(Some(peer.median), "同业倍数中位", "peerAnchor");
+        reg.push_multiple(Some(peer.p75), "同业倍数 p75", "peerAnchor");
     }
 
     // 估值输出：次优先级——自己的确定性计算，可信但排在原始事实之后。
@@ -345,6 +381,14 @@ pub fn build_facts_registry(sources: &RegistrySources) -> FactsRegistry {
         reg.push_amount(v.base, nc, "估值中性", "valuation");
         reg.push_amount(v.bull, nc, "估值看多", "valuation");
         reg.push_amount(v.current_price, nc, "现价", "valuation");
+        // 相对现价空间同样出现在事实块的估值行里，必须登记。它通常为负（估值低于现价 =
+        // 这股票贵），而百分比桶里其余多是正值，漏登时模型如实引用会被判"符号相反"的硬失败。
+        reg.push_percent(parse_pct(v.upside.as_deref()), "估值空间", "valuation");
+        reg.push_percent(
+            parse_pct(v.downside.as_deref()),
+            "估值下行空间",
+            "valuation",
+        );
         // 赔率刻意不进 multiples 桶（与 PE/EV-Sales 完全不同尺度，会造成误报）。
         for m in &v.method_detail {
             reg.push_amount(
@@ -369,6 +413,13 @@ pub fn build_facts_registry(sources: &RegistrySources) -> FactsRegistry {
     }
 
     // 财报日历。
+    for filing in sources.filings {
+        reg.push_date(
+            filing.filed_date.as_deref(),
+            &format!("{} 公告日", filing.form),
+            "filings",
+        );
+    }
     if let Some(next) = sources.earnings_next_date {
         reg.push_date(Some(next), "下一业绩日", "earnings");
     }
@@ -1176,7 +1227,108 @@ pub fn render_hard_fail_issues(report: &VerifyReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::valuation::Financials;
+    use crate::valuation::{Financials, HistoricalValuation};
+
+    /// 历史 PE 分位来自历史行情 + 年报 EPS，与当季三表是两条独立管线。三表 429/缺源时
+    /// （`provider_ok=false`）事实块照样把分位喂给模型，登记表就必须照样收录——否则模型
+    /// 如实照抄反被判失败。这是估值区间上线后暴露的真实故障（AAPL 一度 0 过 / 4 核）。
+    #[test]
+    fn historical_percentiles_registered_even_without_live_statements() {
+        let fin = Financials {
+            provider_ok: false,
+            historical_valuation: Some(HistoricalValuation {
+                percentile: Some(dec!(98.28)),
+                min: Some(dec!(21.31)),
+                max: Some(dec!(44.53)),
+                median: Some(dec!(31.70)),
+                p25: Some(dec!(28.02)),
+                p75: Some(dec!(36.80)),
+                latest: Some(dec!(43.93)),
+            }),
+            ..Default::default()
+        };
+        let reg = build_facts_registry(&RegistrySources {
+            ticker: "AAPL",
+            financials: Some(&fin),
+            ..Default::default()
+        });
+        let answer = "当前 43.93x 的 PE 处于近 5 年 98.28% 分位，远超历史中位 31.70x，\
+                      p25 为 28.02x、p75 为 36.80x。";
+        let report = verify_answer_numbers(answer, &reg);
+        assert_eq!(
+            report.hard_count, 0,
+            "如实照抄的分位不得判硬失败: {report:?}"
+        );
+        assert_eq!(report.soft_count, 0, "分位应全部核上: {report:?}");
+        assert_eq!(report.pass_count(), 5);
+    }
+
+    /// 估值空间是负数（估值低于现价 = 贵），而百分比桶里其余多为正值。漏登时模型如实引用
+    /// 会撞上"符号相反"判成硬失败——AAPL 实测就栽在这一处。
+    #[test]
+    fn valuation_upside_is_registered_so_negative_space_is_not_a_sign_flip() {
+        let valuation = Valuation {
+            method: "历史 PE 分位".into(),
+            bear: Some(dec!(207.28)),
+            base: Some(dec!(234.51)),
+            bull: Some(dec!(272.01)),
+            upside: Some("-27.8%".into()),
+            downside: Some("-36.2%".into()),
+            current_price: Some(dec!(324.98)),
+            methods: vec!["历史 PE 分位".into()],
+            method_detail: Vec::new(),
+            key_assumptions: Vec::new(),
+            sensitivity: Vec::new(),
+            stage_aware: false,
+            stage: None,
+            data_suspect: false,
+            cannot_value_reason: None,
+        };
+        let reg = build_facts_registry(&RegistrySources {
+            ticker: "AAPL",
+            native_currency: Some("USD"),
+            valuation: Some(&valuation),
+            ..Default::default()
+        });
+        let report = verify_answer_numbers("基准估值区间 234.51 对应现价空间为 -27.8%。", &reg);
+        assert_eq!(report.hard_count, 0, "如实引用估值空间不得判硬: {report:?}");
+        assert_eq!(report.pass_count(), 2);
+    }
+
+    /// 事实块明写"可引用表单类型与日期"，登记表就必须收下公告日期——否则模型照做引用
+    /// 反被判"日期查无"的硬失败。这是本文件第四次出现同一条教训（历史分位、估值空间、
+    /// p25/p75、公告日期），每次都是"喂给模型了但没登记"。
+    #[test]
+    fn filing_dates_are_registered_so_quoting_them_is_not_a_hard_fail() {
+        let filings = vec![
+            Filing {
+                form: "10-Q".into(),
+                filed_date: Some("2026-05-01".into()),
+                source_url: "https://example.com/10q".into(),
+            },
+            Filing {
+                form: "8-K".into(),
+                filed_date: Some("2026-04-30".into()),
+                source_url: "https://example.com/8k".into(),
+            },
+        ];
+        let reg = build_facts_registry(&RegistrySources {
+            ticker: "AAPL",
+            filings: &filings,
+            ..Default::default()
+        });
+        let report =
+            verify_answer_numbers("最新季度财报（10-Q 2026-05-01）仍未核到具体数字。", &reg);
+        assert_eq!(report.hard_count, 0, "如实引用公告日期不得判硬: {report:?}");
+    }
+
+    #[test]
+    fn parse_pct_round_trips_display_strings() {
+        assert_eq!(parse_pct(Some("-27.8%")), Some(dec!(-27.8)));
+        assert_eq!(parse_pct(Some("12%")), Some(dec!(12)));
+        assert_eq!(parse_pct(None), None);
+        assert_eq!(parse_pct(Some("未核到")), None);
+    }
 
     fn tencent_registry() -> FactsRegistry {
         let fin = Financials {
