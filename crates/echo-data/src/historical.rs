@@ -240,9 +240,11 @@ fn summarize(points: &[HistoricalValuationPointRow]) -> Option<HistoricalValuati
     values.sort();
     let min = values.first().copied();
     let max = values.last().copied();
-    let median = values.get(values.len() / 2).copied();
-    let p25 = values.get(values.len() / 4).copied();
-    let p75 = values.get(values.len() * 3 / 4).copied();
+    // 与同业锚点共用同一套插值分位，否则同一条 PE 序列会在事实块与估值里给出不同的中位数。
+    let (p25, median, p75) = match crate::stats::quartiles_sorted(&values) {
+        Some((p25, median, p75)) => (Some(p25), Some(median), Some(p75)),
+        None => (None, None, None),
+    };
     // 分位用点位序列里最新一条（`points` 按日期升序）近似"当前"——月度粒度，非当日估值。
     let latest = points.last().and_then(|p| p.pe_value);
     let percentile = latest.map(|latest| {

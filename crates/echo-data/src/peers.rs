@@ -11,7 +11,6 @@ use chrono::Utc;
 use echo_config::DataSourceConfig;
 use echo_db::{PeersRepository, PeersRow, PeersUpsert, Pool};
 use rust_decimal::Decimal;
-use rust_decimal::prelude::ToPrimitive;
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -237,24 +236,12 @@ fn band(mut values: Vec<(String, Decimal)>) -> Option<PeerBand> {
     }
     values.sort_by(|a, b| a.1.cmp(&b.1));
     let n = values.len();
-    // 线性插值分位（同 PostgreSQL `percentile_cont`）。此前是「四舍五入取最近索引」，在小样本
-    // 上会让相邻分位塌到同一个值：n=3 时 p25 与中位同取 values[1]，n=4 时中位与 p75 同取
-    // values[2]。免费档可比集恰好就是 3–5 家，于是同业带长期退化成一个点，看着像"同业口径
-    // 高度一致"，实际是算法假象（实测 AAPL 4 家 → 中位 = p75 = 22.65x）。
-    let at = |p: Decimal| -> Decimal {
-        let pos = p * Decimal::from(n - 1);
-        let lo_index = pos.floor().to_usize().unwrap_or(0).min(n - 1);
-        let hi_index = pos.ceil().to_usize().unwrap_or(0).min(n - 1);
-        let (lo, hi) = (values[lo_index].1, values[hi_index].1);
-        if lo_index == hi_index {
-            return lo;
-        }
-        lo + (hi - lo) * (pos - pos.floor())
-    };
+    let sorted: Vec<Decimal> = values.iter().map(|(_, value)| *value).collect();
+    let (p25, median, p75) = crate::stats::quartiles_sorted(&sorted)?;
     Some(PeerBand {
-        p25: at(Decimal::new(25, 2)),
-        median: at(Decimal::new(50, 2)),
-        p75: at(Decimal::new(75, 2)),
+        p25,
+        median,
+        p75,
         n,
         tickers: values.into_iter().map(|(ticker, _)| ticker).collect(),
     })

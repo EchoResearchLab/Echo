@@ -171,12 +171,22 @@ pub(crate) fn facts_block(ctx: &AnswerContext) -> String {
     if let Some(hv) = &ctx.financials.historical_valuation {
         out.push_str("\n\n== 已核到的历史估值分位（近5年月度PE，仅美股）==\n");
         out.push_str(&format!("当前分位：{}\n", field(hv.percentile, "%")));
+        out.push_str(&format!("当前倍数：{}\n", field(hv.latest, "x")));
+        // p25/中位/p75 是估值「历史 PE 分位」法的锚点，必须逐个给出具体倍数：估值假设行里
+        // 会提到这三个分位，事实块若只给 min/max/median，模型想引用 p25/p75 时无数可依，
+        // 就会自己凑一个近似值（实测 GOOGL 中位 28.12x 被写成 28.17x，直接触发护栏硬失败）。
         out.push_str(&format!(
-            "历史区间：{} ~ {}（中位 {}）\n",
-            field(hv.min, "x"),
-            field(hv.max, "x"),
-            field(hv.median, "x")
+            "四分位：p25 {} / 中位 {} / p75 {}\n",
+            field(hv.p25, "x"),
+            field(hv.median, "x"),
+            field(hv.p75, "x")
         ));
+        out.push_str(&format!(
+            "历史区间：{} ~ {}\n",
+            field(hv.min, "x"),
+            field(hv.max, "x")
+        ));
+        out.push_str("引用上述任一倍数时必须原样照抄，不得四舍五入或换算。\n");
     }
 
     if !ctx.filings.is_empty() {

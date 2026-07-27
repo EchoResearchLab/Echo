@@ -18,6 +18,7 @@ mod quality;
 mod quote;
 mod router;
 mod search;
+mod stats;
 
 pub use calendar::{CalendarError, CalendarService};
 pub use email::{EmailError, EmailService, looks_like_email};
