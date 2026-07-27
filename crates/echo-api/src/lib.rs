@@ -1206,10 +1206,15 @@ fn financials_from_fmp_row(row: &FundamentalsRow) -> Financials {
         operating_cash_flow: row.operating_cash_flow,
         cash_and_equivalents: row.cash_and_equivalents,
         net_cash: row.net_cash,
-        // 单季 EPS：标为未年化，禁止 price/eps 反推 PE；估值用 pe_ttm。
-        eps: row.eps,
-        eps_annualized: Some(false),
+        // EPS 优先用 TTM（`netIncomePerShareTTM`）并标为已年化，估值 PE 法才成立；供应商这轮
+        // 没给 TTM 时退回单季并标未年化——宁可不给估值区间，也不拿单季 EPS 反推出四倍虚高的
+        // 目标价。研究语境下"每股收益"本就该是 TTM 口径，护栏登记的也是这个值。
+        eps: row.eps_ttm.or(row.eps),
+        eps_annualized: row.eps_ttm.is_none().then_some(false),
         pe: row.pe_ttm,
+        free_cash_flow: row.free_cash_flow_ttm,
+        shares_outstanding: row.shares_outstanding,
+        total_debt: row.total_debt,
         revenue_growth: pct_change(row.revenue, row.revenue_prior),
         gross_margin: pct_of(row.gross_profit, row.revenue),
         operating_margin: pct_of(row.operating_income, row.revenue),

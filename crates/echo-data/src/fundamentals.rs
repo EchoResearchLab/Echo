@@ -2,7 +2,13 @@
 //!
 //! 边界与旧 `fmpFundamentalsAdapter` 对齐：免费档三表只对美股代码可用；HK/CN 会
 //! 返回 premium 错误体，因此 `supports` 严格 US-only。商用模式禁止未授权免费源。
-//! 季度 EPS 不得用于反推 PE——调用方应优先使用本结果的 `pe_ttm`。
+//! 季度 EPS 不得用于反推 PE——调用方应优先使用本结果的 `eps_ttm` / `pe_ttm`。
+//!
+//! **TTM 口径来自 `ratios-ttm`**（免费档已覆盖）：过去只从这个响应里取了 `pe_ttm` 一个字段，
+//! 而估值的五条方法全都要年化 EPS 或 FCF，于是 `compute_valuation` 在生产链路上 100% 落到
+//! `cannot_value`——811 行估值逻辑与四条不变量测试全绿，却从未产出过一次估值区间。
+//! 同一个响应里本来就有 `netIncomePerShareTTM`（年化 EPS）与 `freeCashFlowPerShareTTM`，
+//! 取回来即可让 PE / 同业倍数 PE / FCF Yield / DCF 四法点火，不增加任何一次外部请求。
 
 use crate::fmp::{self, FmpError, decimal_at, fetch_json, string_at};
 use crate::{Market, detect_market, normalize_ticker};
@@ -20,9 +26,19 @@ pub struct FundamentalsRow {
     pub operating_cash_flow: Option<Decimal>,
     pub cash_and_equivalents: Option<Decimal>,
     pub net_cash: Option<Decimal>,
-    /// 单季 EPS，仅供展示；估值应用 `pe_ttm`，并把 `eps_annualized` 视为 false。
+    /// 单季 EPS，仅供展示；估值应用 `eps_ttm`，并把 `eps_annualized` 视为 false。
     pub eps: Option<Decimal>,
+    /// TTM 每股收益（`netIncomePerShareTTM`）——已年化，是估值 PE 法唯一可用的 EPS 口径。
+    /// 亏损公司为负，如实透传：由 `classify_asset_stage` 决定改走 EV/Sales，不在这里过滤。
+    pub eps_ttm: Option<Decimal>,
     pub pe_ttm: Option<Decimal>,
+    /// TTM 自由现金流总额 = `freeCashFlowPerShareTTM` × 摊薄股本。供应商只给每股口径，
+    /// 乘回总额是为了让 DCF 与 EV/Sales 用同一个绝对值基数；缺任一乘数即 `None`。
+    pub free_cash_flow_ttm: Option<Decimal>,
+    /// 摊薄股本（`weightedAverageShsOutDil`，缺失退回基本股本）。
+    pub shares_outstanding: Option<Decimal>,
+    pub total_debt: Option<Decimal>,
+    pub enterprise_value: Option<Decimal>,
     pub revenue_prior: Option<Decimal>,
     pub net_income_prior: Option<Decimal>,
     pub period_end: Option<String>,
@@ -130,43 +146,68 @@ impl FundamentalsService {
         let balance_row = balance.as_ref().and_then(first_object);
         let ratios_row = ratios.as_ref().and_then(first_object);
 
-        let pe_ttm = ratios_row
-            .and_then(|row| decimal_at(row, "priceToEarningsRatioTTM"))
-            .filter(|value| *value > Decimal::ZERO);
-
-        let fiscal_year = string_at(current, "fiscalYear");
-        let period = string_at(current, "period");
-        let period_label = match (fiscal_year, period) {
-            (Some(year), Some(period)) => Some(format!("{year} {period}")),
-            _ => None,
-        };
-
-        let net_debt = balance_row.and_then(|row| decimal_at(row, "netDebt"));
-        let row = FundamentalsRow {
-            currency: string_at(current, "reportedCurrency"),
-            revenue: decimal_at(current, "revenue"),
-            gross_profit: decimal_at(current, "grossProfit"),
-            operating_income: decimal_at(current, "operatingIncome"),
-            net_income: decimal_at(current, "netIncome"),
-            operating_cash_flow: cash_row
-                .and_then(|row| decimal_at(row, "netCashProvidedByOperatingActivities")),
-            cash_and_equivalents: balance_row
-                .and_then(|row| decimal_at(row, "cashAndCashEquivalents")),
-            net_cash: net_debt.map(|debt| -debt),
-            eps: decimal_at(current, "epsDiluted").or_else(|| decimal_at(current, "eps")),
-            pe_ttm,
-            revenue_prior: prior.and_then(|row| decimal_at(row, "revenue")),
-            net_income_prior: prior.and_then(|row| decimal_at(row, "netIncome")),
-            period_end: string_at(current, "date"),
-            published_at: string_at(current, "filingDate"),
-            period_label,
-        };
-
         Ok(FundamentalsResult {
             provider_ok: true,
             source: "FMP".into(),
-            rows: vec![row],
+            rows: vec![map_row(current, prior, cash_row, balance_row, ratios_row)],
         })
+    }
+}
+
+/// 四个 FMP 响应 → 一行事实。独立于 HTTP，测试直接喂 fixture 走同一条映射——此前测试把
+/// 映射逻辑抄了一份，改了取数字段测试也照样绿，正是估值腿断了一直没被发现的原因之一。
+fn map_row(
+    current: &Value,
+    prior: Option<&Value>,
+    cash_row: Option<&Value>,
+    balance_row: Option<&Value>,
+    ratios_row: Option<&Value>,
+) -> FundamentalsRow {
+    let pe_ttm = ratios_row
+        .and_then(|row| decimal_at(row, "priceToEarningsRatioTTM"))
+        .filter(|value| *value > Decimal::ZERO);
+    let eps_ttm = ratios_row.and_then(|row| decimal_at(row, "netIncomePerShareTTM"));
+
+    // 摊薄优先：回购在摊薄口径下才反映到每股，基本股本只作兜底。
+    let shares_outstanding = decimal_at(current, "weightedAverageShsOutDil")
+        .or_else(|| decimal_at(current, "weightedAverageShsOut"))
+        .filter(|value| *value > Decimal::ZERO);
+    let free_cash_flow_ttm = ratios_row
+        .and_then(|row| decimal_at(row, "freeCashFlowPerShareTTM"))
+        .zip(shares_outstanding)
+        .map(|(per_share, shares)| per_share * shares);
+
+    let period_label = match (
+        string_at(current, "fiscalYear"),
+        string_at(current, "period"),
+    ) {
+        (Some(year), Some(period)) => Some(format!("{year} {period}")),
+        _ => None,
+    };
+    let net_debt = balance_row.and_then(|row| decimal_at(row, "netDebt"));
+
+    FundamentalsRow {
+        currency: string_at(current, "reportedCurrency"),
+        revenue: decimal_at(current, "revenue"),
+        gross_profit: decimal_at(current, "grossProfit"),
+        operating_income: decimal_at(current, "operatingIncome"),
+        net_income: decimal_at(current, "netIncome"),
+        operating_cash_flow: cash_row
+            .and_then(|row| decimal_at(row, "netCashProvidedByOperatingActivities")),
+        cash_and_equivalents: balance_row.and_then(|row| decimal_at(row, "cashAndCashEquivalents")),
+        net_cash: net_debt.map(|debt| -debt),
+        eps: decimal_at(current, "epsDiluted").or_else(|| decimal_at(current, "eps")),
+        eps_ttm,
+        pe_ttm,
+        free_cash_flow_ttm,
+        shares_outstanding,
+        total_debt: balance_row.and_then(|row| decimal_at(row, "totalDebt")),
+        enterprise_value: ratios_row.and_then(|row| decimal_at(row, "enterpriseValueTTM")),
+        revenue_prior: prior.and_then(|row| decimal_at(row, "revenue")),
+        net_income_prior: prior.and_then(|row| decimal_at(row, "netIncome")),
+        period_end: string_at(current, "date"),
+        published_at: string_at(current, "filingDate"),
+        period_label,
     }
 }
 
@@ -207,8 +248,8 @@ mod tests {
     use rust_decimal_macros::dec;
     use serde_json::json;
 
-    #[test]
-    fn maps_stable_fixture_like_retired_adapter() {
+    /// 字段名取自 2026-07-27 对 `stable` 免费档 AAPL 的实测响应，勿凭印象改。
+    fn aapl_fixture() -> (Value, Value, Value, Value) {
         let income = json!([
             {
                 "date": "2026-03-28",
@@ -220,57 +261,97 @@ mod tests {
                 "grossProfit": 44_867_000_000i64,
                 "operatingIncome": 29_552_000_000i64,
                 "netIncome": 24_780_000_000i64,
-                "eps": 1.65,
-                "epsDiluted": 1.65
+                "eps": 2.02,
+                "epsDiluted": 2.01,
+                "weightedAverageShsOut": 14_710_718_000i64,
+                "weightedAverageShsOutDil": 14_768_115_000i64
             },
             {
                 "revenue": 89_498_000_000i64,
                 "netIncome": 22_292_000_000i64
             }
         ]);
-        let cash = json!([{ "netCashProvidedByOperatingActivities": 29_000_000_000i64 }]);
+        let cash = json!([{
+            "netCashProvidedByOperatingActivities": 28_702_000_000i64,
+            "freeCashFlow": 26_731_000_000i64
+        }]);
         let balance = json!([{
             "cashAndCashEquivalents": 30_000_000_000i64,
+            "totalDebt": 98_000_000_000i64,
             "netDebt": -10_000_000_000i64
         }]);
-        let ratios = json!([{ "priceToEarningsRatioTTM": 28.5 }]);
+        let ratios = json!([{
+            "priceToEarningsRatioTTM": 40.17129071170084,
+            "netIncomePerShareTTM": 8.332360120015895,
+            "freeCashFlowPerShareTTM": 8.780944614668027,
+            "enterpriseValueTTM": 4_939_566_295_120i64
+        }]);
+        (income, cash, balance, ratios)
+    }
 
-        let current = first_object(&income).expect("current");
-        let prior = nth_object(&income, 1);
-        let cash_row = first_object(&cash);
-        let balance_row = first_object(&balance);
-        let ratios_row = first_object(&ratios);
-        let pe_ttm = ratios_row
-            .and_then(|row| decimal_at(row, "priceToEarningsRatioTTM"))
-            .filter(|value| *value > Decimal::ZERO);
-        let net_debt = balance_row.and_then(|row| decimal_at(row, "netDebt"));
-        let row = FundamentalsRow {
-            currency: string_at(current, "reportedCurrency"),
-            revenue: decimal_at(current, "revenue"),
-            gross_profit: decimal_at(current, "grossProfit"),
-            operating_income: decimal_at(current, "operatingIncome"),
-            net_income: decimal_at(current, "netIncome"),
-            operating_cash_flow: cash_row
-                .and_then(|row| decimal_at(row, "netCashProvidedByOperatingActivities")),
-            cash_and_equivalents: balance_row
-                .and_then(|row| decimal_at(row, "cashAndCashEquivalents")),
-            net_cash: net_debt.map(|debt| -debt),
-            eps: decimal_at(current, "epsDiluted").or_else(|| decimal_at(current, "eps")),
-            pe_ttm,
-            revenue_prior: prior.and_then(|row| decimal_at(row, "revenue")),
-            net_income_prior: prior.and_then(|row| decimal_at(row, "netIncome")),
-            period_end: string_at(current, "date"),
-            published_at: string_at(current, "filingDate"),
-            period_label: Some("2026 Q2".into()),
-        };
+    fn map_fixture() -> FundamentalsRow {
+        let (income, cash, balance, ratios) = aapl_fixture();
+        map_row(
+            first_object(&income).expect("current"),
+            nth_object(&income, 1),
+            first_object(&cash),
+            first_object(&balance),
+            first_object(&ratios),
+        )
+    }
 
-        assert_eq!(row.eps, Some(dec!(1.65)));
-        assert_eq!(row.pe_ttm, Some(dec!(28.5)));
+    #[test]
+    fn maps_stable_fixture_like_retired_adapter() {
+        let row = map_fixture();
+        assert_eq!(row.eps, Some(dec!(2.01)));
+        assert_eq!(row.pe_ttm, Some(dec!(40.17129071170084)));
         assert_eq!(row.net_cash, Some(dec!(10000000000)));
+        assert_eq!(row.period_label.as_deref(), Some("2026 Q2"));
         let growth = pct_change(row.revenue, row.revenue_prior).expect("growth");
         assert!(growth > dec!(6) && growth < dec!(7));
         let margin = pct_of(row.net_income, row.revenue).expect("margin");
         assert!(margin > dec!(25) && margin < dec!(27));
+    }
+
+    /// 估值四法（PE / 同业 PE / FCF Yield / DCF）所依赖的口径必须全部到位——这些字段任一
+    /// 回到 `None`，`compute_valuation` 就会重新落到 `cannot_value`，估值区间再次消失。
+    #[test]
+    fn ttm_fields_unlock_valuation() {
+        let row = map_fixture();
+        assert_eq!(
+            row.eps_ttm,
+            Some(dec!(8.332360120015895)),
+            "PE 法要年化 EPS"
+        );
+        // 摊薄优先，不取 weightedAverageShsOut。
+        assert_eq!(row.shares_outstanding, Some(dec!(14768115000)));
+        // 每股 FCF × 摊薄股本 ≈ 1297 亿美元。
+        let fcf = row.free_cash_flow_ttm.expect("FCF Yield 与 DCF 要总额 FCF");
+        assert!(
+            fcf > dec!(128_000_000_000) && fcf < dec!(131_000_000_000),
+            "FCF={fcf}"
+        );
+        assert_eq!(row.total_debt, Some(dec!(98000000000)));
+        assert_eq!(row.enterprise_value, Some(dec!(4939566295120)));
+    }
+
+    /// 免费档偶尔整份 `ratios-ttm` 取不到（限流/字段缺失）。此时估值该诚实失败，
+    /// 绝不能用单季 EPS 冒充年化——那会算出四倍虚高的目标价。
+    #[test]
+    fn missing_ratios_leaves_ttm_fields_none() {
+        let (income, cash, balance, _) = aapl_fixture();
+        let row = map_row(
+            first_object(&income).expect("current"),
+            None,
+            first_object(&cash),
+            first_object(&balance),
+            None,
+        );
+        assert_eq!(row.eps_ttm, None);
+        assert_eq!(row.pe_ttm, None);
+        assert_eq!(row.free_cash_flow_ttm, None);
+        // 股本来自 income-statement，不受 ratios 缺失影响。
+        assert_eq!(row.shares_outstanding, Some(dec!(14768115000)));
     }
 
     #[tokio::test]
