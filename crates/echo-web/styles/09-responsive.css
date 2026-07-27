@@ -228,6 +228,12 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* 三档在窄屏改竖排后，横向刻度轴与它们不再一一对应，留着反而误导位置关系。
+     相对现价的空间仍由下方 `.val-upside` 文字给出，信息不丢。 */
+  .val-track {
+    display: none;
+  }
+
   .company-showcase {
     grid-template-columns: minmax(0, 1fr);
   }

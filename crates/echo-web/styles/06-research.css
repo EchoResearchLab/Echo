@@ -256,12 +256,13 @@
   overflow-y: auto;
   overflow-x: hidden;
   padding: var(--sp-7) 0 var(--sp-6);
-  /* 滚动边界给一段渐隐，内容不在编辑器上沿被硬切成半张卡。 */
+  /* 滚动边界给一段渐隐，内容不在编辑器上沿被硬切成半张卡。下沿的渐隐比上沿长：
+     上沿只需和顶栏脱开，下沿要化解「卡片被切掉一半」——20px 太短，看着仍像硬切。 */
   mask-image: linear-gradient(
     180deg,
     transparent 0,
     #000 var(--sp-4),
-    #000 calc(100% - var(--sp-5)),
+    #000 calc(100% - var(--sp-8)),
     transparent 100%
   );
 }
@@ -693,6 +694,63 @@
   font-style: normal;
 }
 
+/* 刻度轴 + 三档数字是一个整体，轴负责回答"现价落在带内还是带外"。 */
+.val-scale {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+/* 轴代表 min(熊,现价)…max(牛,现价)，估值带只是其中一段——现价因此永远落在轴内，
+   它与带子的距离就是"贵/便宜多少"。轴两端留出标记宽度，标签不会溢出卡片。 */
+.val-track {
+  position: relative;
+  height: 4px;
+  border-radius: var(--r-full);
+  background: var(--paper-inset);
+  margin: var(--sp-6) var(--sp-6) 0;
+}
+
+.val-track-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    to right,
+    var(--brand-200),
+    var(--brand-500),
+    var(--brand-200)
+  );
+}
+
+.val-price-marker {
+  position: absolute;
+  top: 50%;
+  display: grid;
+  justify-items: center;
+  gap: var(--sp-1);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.val-price-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--r-full);
+  background: var(--ink-1);
+  box-shadow: 0 0 0 3px var(--paper-canvas);
+}
+
+.val-price-tag {
+  position: absolute;
+  bottom: calc(100% + var(--sp-2));
+  white-space: nowrap;
+  color: var(--ink-2);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .val-bands {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -727,6 +785,7 @@
   color: var(--ink-1);
   font-size: var(--fs-16);
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .val-upside {
@@ -734,8 +793,95 @@
   font-size: var(--fs-12);
 }
 
+/* 空间为负（现价高于基准 = 贵）用语义色，为正用涨色；只标方向，不替用户下判断。 */
 .val-upside strong {
-  color: var(--brand-ink);
+  color: var(--danger-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.val-upside.is-cheap strong {
+  color: var(--ok);
+}
+
+/* ── 逐法明细 ───────────────────────────────────────────────────────── */
+.val-methods > summary {
+  color: var(--ink-3);
+  font-size: var(--fs-12);
+  cursor: pointer;
+  padding: var(--sp-1) 0;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  /* 覆盖证据面板那条通用 summary 规则的 space-between——它会把箭头甩到最左、
+     标题甩到最右，中间空一大段，看着像两个不相干的元素。 */
+  justify-content: flex-start;
+  transition: color var(--dur-1) var(--ease-in-out);
+}
+
+.val-methods > summary::-webkit-details-marker {
+  display: none;
+}
+
+.val-methods > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.val-methods[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.val-methods > summary:hover {
+  color: var(--ink-2);
+}
+
+.val-method-table {
+  width: 100%;
+  margin-top: var(--sp-3);
+  border-collapse: collapse;
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+}
+
+.val-method-table th,
+.val-method-table td {
+  padding: var(--sp-2) var(--sp-2);
+  border-bottom: 1px solid var(--line-1);
+  text-align: right;
+}
+
+.val-method-table thead th {
+  color: var(--ink-4);
+  font-weight: 600;
+  font-size: var(--fs-11);
+}
+
+.val-method-table th[scope="row"],
+.val-method-table thead th:first-child {
+  text-align: left;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.val-method-table tbody tr:last-child th,
+.val-method-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.val-assumptions {
+  margin: var(--sp-3) 0 0;
+  padding-left: var(--sp-4);
+  display: grid;
+  gap: var(--sp-1);
+  color: var(--ink-3);
+  font-size: var(--fs-11);
+  line-height: var(--lh-snug);
 }
 
 .val-none {
@@ -890,7 +1036,9 @@
   background: var(--paper-raised);
 }
 
-.evidence-panel summary {
+/* 直接子代：后代选择器会捕获面板内部任何嵌套的 summary（如估值的逐法明细），
+   把它们一并套上 space-between 与面板内边距。 */
+.evidence-panel > summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -902,11 +1050,11 @@
   transition: background-color var(--dur-1) linear;
 }
 
-.evidence-panel summary::-webkit-details-marker {
+.evidence-panel > summary::-webkit-details-marker {
   display: none;
 }
 
-.evidence-panel summary:hover {
+.evidence-panel > summary:hover {
   background: var(--paper-canvas);
 }
 
@@ -927,7 +1075,7 @@
   transform: rotate(180deg);
 }
 
-.evidence-panel[open] summary {
+.evidence-panel[open] > summary {
   border-bottom: 1px solid var(--line-1);
   border-radius: var(--r-md) var(--r-md) 0 0;
 }
@@ -1066,11 +1214,13 @@
   z-index: 1;
 }
 
+/* 上限从 54px 收到 44px：落地页每次进来都要先看它一遍，54px 两行吃掉近 140px 首屏高度，
+   把研究入口挤到折线以下。克制的标题让内容更早出现。 */
 .hero-heading-row h1 {
   display: grid;
   color: var(--ink-1);
   font-family: var(--font-serif);
-  font-size: clamp(32px, 4.4vw, 54px);
+  font-size: clamp(30px, 3.4vw, 44px);
   font-weight: 500;
   line-height: 1.24;
   letter-spacing: 0.01em;
@@ -1092,9 +1242,12 @@
   display: grid;
 }
 
+/* 固定两列而非 auto-fit：空态被 `.conversation > div` 限制在阅读宽度（约 796px）内，
+   放不下四列 212px（需 896px），auto-fit 于是塌成 3+1，第四张卡永远孤零零挂在下一行。
+   两列在这个宽度下每张约 390px，信息更舒展，且四个入口刚好排满两行，不会有孤儿。 */
 .company-showcase {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(212px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-4);
 }
 

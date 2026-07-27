@@ -322,7 +322,34 @@ fn schedule_turn_timeout(_turn: Turn, _timeout_ms: i32, _message: &'static str) 
 
 // ── Components ────────────────────────────────────────────────────────────
 
-/// 估值三段带（bear / base / bull）。
+/// 估值带与现价在同一条轴上的位置：`(带左缘%, 带宽%, 现价%)`。全程 Decimal，不碰浮点。
+///
+/// 轴的范围取 `min(熊,现价) … max(牛,现价)` 再留 8% 余量，**不是**固定的熊–牛。原因：现价
+/// 高于牛（或低于熊）恰恰是最该看清的情形，若把轴固定成熊–牛，现价只能溢出到轴外——实测
+/// AAPL 现价 324.98 对牛 272.01 会被推到 112% 处，标记直接飘到卡片外的背景上。夹到端点也
+/// 不行：那样"贵一点点"和"贵一倍"长得一模一样，而这正是这条轴唯一要回答的问题。
+/// 让轴自适应后，带子成为轴上的一段，现价与它的距离就是"贵/便宜多少"的直观表达。
+fn band_geometry(bear: Decimal, bull: Decimal, price: Decimal) -> Option<(String, String, String)> {
+    let lo_raw = bear.min(price);
+    let hi_raw = bull.max(price);
+    let pad = (hi_raw - lo_raw) * Decimal::new(8, 2);
+    let (lo, hi) = (lo_raw - pad, hi_raw + pad);
+    let span = hi - lo;
+    if span <= Decimal::ZERO {
+        return None;
+    }
+    let pct = |v: Decimal| (v - lo) * Decimal::ONE_HUNDRED / span;
+    let left = pct(bear);
+    let width = pct(bull) - left;
+    let render = |v: Decimal| v.round_dp(2).normalize().to_string();
+    Some((render(left), render(width), render(pct(price))))
+}
+
+/// 估值区间——刻度轴 + 逐法明细 + 关键假设。
+///
+/// 这里是「让每个判断都有证据」最该兑现的地方：只报三个数字，用户无从判断该不该信。
+/// 轴让"现价落在带内还是带外"一眼可见（带外 = 贵/便宜），逐法明细摊开每条方法各自的
+/// 结论——方法之间分歧大本身就是重要信息，被平均成一个数就看不见了。
 #[component]
 pub(crate) fn ValuationBand(v: ValuationView) -> impl IntoView {
     if let Some(reason) = v.cannot_value_reason.clone() {
@@ -334,28 +361,98 @@ pub(crate) fn ValuationBand(v: ValuationView) -> impl IntoView {
         }
         .into_view();
     }
+
+    let axis = match (v.bear, v.bull, v.current_price) {
+        (Some(bear), Some(bull), Some(price)) if bull > bear => {
+            band_geometry(bear, bull, price).map(|geo| (geo, decimal_text(Some(price))))
+        }
+        _ => None,
+    };
+    let details = v.method_detail.clone();
+    let assumptions = v.key_assumptions.clone();
+
     view! {
         <div class="valuation-block">
             <div class="valuation-head">
                 <span>"估值区间"</span>
                 <em>{v.method.clone()}</em>
             </div>
-            <div class="val-bands">
-                <div class="val-cell">
-                    <span class="val-k">"熊"</span>
-                    <span class="val-v">{decimal_text(v.bear)}</span>
-                </div>
-                <div class="val-cell base-cell">
-                    <span class="val-k">"基准"</span>
-                    <span class="val-v">{decimal_text(v.base)}</span>
-                </div>
-                <div class="val-cell">
-                    <span class="val-k">"牛"</span>
-                    <span class="val-v">{decimal_text(v.bull)}</span>
+
+            <div class="val-scale">
+                {axis.clone().map(|((left, width, price_x), price_text)| view! {
+                    <div class="val-track">
+                        <span
+                            class="val-track-fill"
+                            style=move || format!("left:{left}%;width:{width}%")
+                        ></span>
+                        <span
+                            class="val-price-marker"
+                            style=move || format!("left:{price_x}%")
+                        >
+                            <span class="val-price-dot"></span>
+                            <span class="val-price-tag">"现价 " {price_text}</span>
+                        </span>
+                    </div>
+                })}
+                <div class="val-bands">
+                    <div class="val-cell">
+                        <span class="val-k">"熊"</span>
+                        <span class="val-v">{decimal_text(v.bear)}</span>
+                    </div>
+                    <div class="val-cell base-cell">
+                        <span class="val-k">"基准"</span>
+                        <span class="val-v">{decimal_text(v.base)}</span>
+                    </div>
+                    <div class="val-cell">
+                        <span class="val-k">"牛"</span>
+                        <span class="val-v">{decimal_text(v.bull)}</span>
+                    </div>
                 </div>
             </div>
-            {v.upside.clone().map(|u| view! {
-                <p class="val-upside">"相对现价 " <strong>{u}</strong></p>
+
+            {v.upside.clone().map(|u| {
+                // 负空间 = 现价高于基准 = 贵。语义色只标方向，不替用户下判断。
+                let cheap = !u.trim_start().starts_with('-');
+                view! {
+                    <p class="val-upside" class:is-cheap=cheap>
+                        "相对现价 " <strong>{u}</strong>
+                    </p>
+                }
+            })}
+
+            {(!details.is_empty()).then(|| view! {
+                <details class="val-methods">
+                    <summary>
+                        {format!("逐法明细（{} 条）", details.len())}
+                    </summary>
+                    <table class="val-method-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">"方法"</th>
+                                <th scope="col">"熊"</th>
+                                <th scope="col">"基准"</th>
+                                <th scope="col">"牛"</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {details.into_iter().map(|m| view! {
+                                <tr>
+                                    <th scope="row">{m.name}</th>
+                                    <td>{decimal_text(Some(m.bear))}</td>
+                                    <td>{decimal_text(Some(m.base))}</td>
+                                    <td>{decimal_text(Some(m.bull))}</td>
+                                </tr>
+                            }).collect_view()}
+                        </tbody>
+                    </table>
+                    {(!assumptions.is_empty()).then(|| view! {
+                        <ul class="val-assumptions">
+                            {assumptions.into_iter()
+                                .map(|a| view! { <li>{a}</li> })
+                                .collect_view()}
+                        </ul>
+                    })}
+                </details>
             })}
         </div>
     }
@@ -1314,14 +1411,12 @@ pub fn ResearchPage(
                                                 <button
                                                     class="company-card"
                                                     aria-label=format!("研究 {name} {ticker}：{prompt}")
+                                                    // 卡片写着"开始研究"就必须真的开始研究。此前只把问题填进
+                                                    // 输入框，用户还得再点一次发送——标签承诺与行为不符。
                                                     on:click=move |_| {
                                                         set_subject.set(ticker.to_string());
                                                         set_question.set(prompt.to_string());
-                                                        #[cfg(target_arch = "wasm32")]
-                                                        if let Some(node) = composer_ref.get_untracked() {
-                                                            let _ = node.focus();
-                                                            autosize(&node);
-                                                        }
+                                                        submit();
                                                     }
                                                 >
                                                     <span class="company-card-head">
