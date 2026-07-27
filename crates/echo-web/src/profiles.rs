@@ -171,11 +171,9 @@ pub fn ProfilesSection() -> impl IntoView {
         <section class="library-section profiles-page">
             <div class="section-heading">
                 <div>
-                    <p class="section-kicker">"RESEARCH MEMORY"</p>
                     <h2>"公司研究档案"</h2>
                     <p>"把论点、多空逻辑、监控项与证伪条件沉淀为可持续更新的长期记忆。"</p>
                 </div>
-                <span class="section-status is-neutral">"估值由研究会话写入"</span>
             </div>
             <section class="action-panel profile-create">
                 <div class="form-grid watch-form-grid">
@@ -252,8 +250,7 @@ pub fn ProfilesSection() -> impl IntoView {
                         view! {
                             <div class="settings-card profile-form">
                                 <div class="profile-editor-head">
-                                    <div><p class="section-kicker">"COMPANY DOSSIER"</p><h2>{move || form_ticker.get()}</h2></div>
-                                    <span class="section-status"><i></i>"自动保存前需确认"</span>
+                                    <div><h2>{move || form_ticker.get()}</h2></div>
                                 </div>
                                 <section class="profile-form-section">
                                     <div class="form-section-title"><strong>"基本判断"</strong><span>"定义当前研究所处阶段"</span></div>

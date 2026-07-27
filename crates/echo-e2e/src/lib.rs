@@ -29,17 +29,12 @@ mod tests {
             .await?;
         client.goto("http://127.0.0.1:5191/").await?;
 
-        // ── 研究：提问 → 作答 → 研究对象保持确认态 ──
+        // ── 研究：提问 → 作答 ──
+        // 编辑器里只有一个输入框：主体由服务端从问题文本识别，界面不再要求用户先选公司。
         client
             .find(Locator::Css("textarea[aria-label='研究问题']"))
             .await?
             .send_keys("AAPL 的估值判断")
-            .await?;
-        // 研究对象输入在首屏就必须可见可填——它曾被空态样式整个隐藏掉。
-        client
-            .find(Locator::Css("input.company-input"))
-            .await?
-            .send_keys("AAPL")
             .await?;
         client
             .find(Locator::Css("button.composer-send"))
@@ -55,9 +50,7 @@ mod tests {
             .find(Locator::Css(".stage-label .thinking-wave"))
             .await?;
         client.find(Locator::Css(".answer-card")).await?;
-        // 发送后研究对象保持确认态（chip 常驻），追问不需要重填公司。
-        client.find(Locator::Css(".company-chip")).await?;
-        // 答案上必须有复制与重新生成入口。
+        // 答案上必须有复制、导出与重新生成入口。
         client.find(Locator::Css(".answer-actions")).await?;
 
         // ── 资料库：自选与监控 → 持仓 → 研究档案 ──

@@ -14,10 +14,11 @@
   min-height: 100dvh;
   padding: var(--sp-10) var(--gutter);
   overflow-x: hidden;
+  /* 背景要有可折射的层次，右侧的玻璃卡才成立：两片品牌光晕落在一层冷调渐变上。 */
   background:
-    radial-gradient(680px 520px at 12% 18%, rgba(36, 98, 90, 0.055), transparent 70%),
-    radial-gradient(560px 420px at 92% 88%, rgba(36, 98, 90, 0.035), transparent 72%),
-    linear-gradient(168deg, #fafbf8 0%, var(--paper-canvas) 55%, #eef1ec 100%);
+    radial-gradient(720px 560px at 10% 16%, rgba(0, 113, 227, 0.10), transparent 68%),
+    radial-gradient(620px 460px at 94% 86%, rgba(0, 113, 227, 0.06), transparent 70%),
+    linear-gradient(168deg, #ffffff 0%, var(--paper-canvas) 52%, #e6e6ea 100%);
 }
 
 /* ── 左栏叙事 ───────────────────────────────────────────────────────── */
@@ -107,31 +108,6 @@
   line-height: var(--lh-read);
 }
 
-.auth-proof {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-5);
-  margin-top: var(--sp-8);
-}
-
-.auth-proof span {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
-  color: var(--ink-2);
-  font-size: var(--fs-13);
-  font-weight: 550;
-}
-
-.auth-proof span::before {
-  width: 5px;
-  height: 5px;
-  content: "";
-  border-radius: var(--r-full);
-  background: var(--brand-400);
-}
-
 /* ── 抽象回声图形：细描边同心弧，只做氛围，不抢信息 ───────────────── */
 /* 图形挂在标题块左上，避免任何一圈描边横穿正文影响可读性。 */
 .auth-echo-art {
@@ -182,16 +158,20 @@
 }
 
 /* ── 右栏表单卡 ─────────────────────────────────────────────────────── */
+/* 表单卡是一块浮在渐变上的玻璃：提饱和 + 大半径模糊 + 顶部内高光 + 极细描边。
+   底下有东西可折射，卡片才像有厚度，而不是一块贴上去的白色矩形。 */
 .auth-card {
   display: grid;
   gap: var(--sp-5);
   align-content: start;
   width: 100%;
   padding: var(--sp-8) var(--sp-7);
-  border: 1px solid var(--line-1);
+  border: 1px solid var(--glass-line);
   border-radius: var(--r-xl);
-  background: var(--paper-raised);
-  box-shadow: var(--e-3);
+  background: var(--glass-strong);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--e-3), var(--glass-sheen);
   animation: authCardIn var(--dur-4) var(--ease-emph) 120ms both;
 }
 
@@ -213,20 +193,15 @@
   font-weight: 500;
 }
 
-.auth-card-head > p:last-child {
-  color: var(--ink-3);
-  font-size: var(--fs-14);
-}
-
-/* 分段控件与资料库切面共用同一语言：浅底轨道 + 白色滑块。 */
+/* 分段控件与顶栏导航共用同一语言：浅底轨道 + 升起的白色滑块。 */
 .auth-tabs {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
-  gap: var(--sp-1);
+  gap: 2px;
   padding: 3px;
   border-radius: var(--r-md);
-  background: var(--paper-sunken);
+  background: var(--glass-track);
 }
 
 .auth-tabs button {
@@ -249,7 +224,7 @@
   color: var(--brand-ink);
   font-weight: 600;
   background: var(--paper-raised);
-  box-shadow: var(--e-1);
+  box-shadow: var(--glass-lift);
 }
 
 .auth-field {
@@ -384,19 +359,3 @@
   text-align: center;
 }
 
-.auth-footnote {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--sp-2);
-  padding-top: var(--sp-4);
-  border-top: 1px solid var(--line-1);
-  color: var(--ink-4);
-  font-size: var(--fs-12);
-}
-
-.auth-footnote svg {
-  width: 13px;
-  height: 13px;
-  color: var(--brand-400);
-}

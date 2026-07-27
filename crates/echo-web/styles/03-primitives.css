@@ -28,7 +28,7 @@
 
 .primary-button:hover:not(:disabled) {
   background: var(--brand-hover);
-  box-shadow: 0 2px 4px rgba(15, 46, 42, 0.2), 0 12px 26px -10px rgba(15, 46, 42, 0.36);
+  box-shadow: 0 2px 4px rgba(0, 60, 130, 0.18), 0 12px 26px -10px rgba(0, 60, 130, 0.32);
   transform: translateY(-1px);
 }
 
@@ -136,9 +136,7 @@
 .primary-button svg,
 .outline-button svg,
 .stream-retry svg,
-.composer-report svg,
-.account-chevron svg,
-.auth-footnote svg {
+.account-chevron svg {
   width: 15px;
   height: 15px;
 }
@@ -190,7 +188,7 @@
 }
 
 /* 用 `:where()` 把排除条件的特异性归零——否则 `input:not():not()` 是 (0,2,1)，
-   会压过 `.company-input` 这类单类名的组件规则，页面层就得靠 !important 反抗。 */
+   会压过 `.watch-form-grid input` 这类单类名的组件规则，页面层就得靠 !important 反抗。 */
 input:where(:not([type="checkbox"]):not([type="radio"])),
 textarea,
 select {
@@ -338,17 +336,6 @@ input[type="checkbox"][role="switch"]:active::after {
   font-size: var(--fs-14);
 }
 
-.section-kicker,
-.company-showcase-kicker,
-.auth-card-kicker,
-.page-kicker {
-  color: var(--ink-4);
-  font-size: var(--fs-11);
-  font-weight: 600;
-  letter-spacing: var(--tracking-kicker);
-  text-transform: uppercase;
-}
-
 .form-section-title {
   display: flex;
   align-items: baseline;
@@ -367,8 +354,7 @@ input[type="checkbox"][role="switch"]:active::after {
 }
 
 /* ── 状态徽标 ───────────────────────────────────────────────────────── */
-.section-status,
-.trust-chip {
+.section-status {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
@@ -382,8 +368,7 @@ input[type="checkbox"][role="switch"]:active::after {
   background: var(--brand-tint);
 }
 
-.section-status i,
-.trust-chip i {
+.section-status i {
   width: 6px;
   height: 6px;
   border-radius: var(--r-full);
@@ -403,8 +388,7 @@ input[type="checkbox"][role="switch"]:active::after {
 
 .inline-feedback,
 .form-error,
-.echo-error,
-.company-error {
+.echo-error {
   display: flex;
   align-items: flex-start;
   gap: var(--sp-2);
@@ -415,8 +399,7 @@ input[type="checkbox"][role="switch"]:active::after {
 
 .inline-feedback.is-error,
 .form-error,
-.echo-error,
-.company-error {
+.echo-error {
   color: var(--danger-ink);
 }
 
@@ -494,7 +477,7 @@ input[type="checkbox"][role="switch"]:active::after {
 }
 
 .page-state.is-error {
-  border-color: rgba(179, 38, 30, 0.24);
+  border-color: var(--danger-line);
   border-style: solid;
   background: var(--danger-tint);
 }

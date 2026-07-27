@@ -6,7 +6,7 @@ use echo_contracts::{
     AuthLoginRequest, AuthLogoutResponse, AuthRegisterRequest, AuthUserResponse,
     ChangedCountResponse, Decimal, DeskResponse, MutationResponse, NotificationReadRequest,
     NotificationsListResponse, PortfolioListResponse, PortfolioUpsertRequest, PreferencesResponse,
-    PreferencesUpdateRequest, PublicUser, UnreadResponse, UserRole, WatchListResponse,
+    PreferencesUpdateRequest, PublicUser, UnreadResponse, WatchListResponse,
     WatchMutationRequest, WatchRuleCreateRequest,
 };
 use leptos::*;
@@ -224,10 +224,6 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
         .unwrap_or_else(|| user.username.clone());
     let avatar_letters = user_initials(&display_name);
     let account_name = display_name.clone();
-    let account_role = match user.role {
-        UserRole::Owner => "FOUNDER ACCESS",
-        UserRole::Member => "RESEARCH ACCESS",
-    };
     let on_research_navigate = Callback::new(move |session_id: Option<String>| {
         navigate(set_page, Page::Research(ResearchEntry::session(session_id)))
     });
@@ -280,9 +276,10 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
                             on:click=move |_| set_account_open.update(|value| *value = !*value)
                         >
                             <span class="user-avatar" aria-hidden="true">{avatar_letters.clone()}</span>
+                            // 只显示名字。"FOUNDER ACCESS / RESEARCH ACCESS" 这类头衔
+                            // 不改变用户能做什么，是纯装饰。
                             <span class="account-copy">
                                 <strong>{account_name.clone()}</strong>
-                                <small>{account_role}</small>
                             </span>
                             <span class="account-chevron" aria-hidden="true"><Icon name="chevron-down" /></span>
                         </button>
@@ -409,11 +406,6 @@ pub fn LoginPage(on_authenticated: Callback<()>) -> impl IntoView {
                 <p class="auth-brand-line"><span></span>"EVIDENCE-FIRST INTELLIGENCE"</p>
                 <h1>"把市场噪音，"<br/><em>"变成清晰判断。"</em></h1>
                 <p class="auth-story-copy">"面向美股与港股科技公司的研究工作台。事实、估值、风险与证伪，沉淀为一条可复盘的证据链。"</p>
-                <div class="auth-proof" aria-label="产品能力">
-                    <span>"实时研究"</span>
-                    <span>"数字护栏"</span>
-                    <span>"长期记忆"</span>
-                </div>
             </section>
             <form
                 class="auth-card"
@@ -424,9 +416,7 @@ pub fn LoginPage(on_authenticated: Callback<()>) -> impl IntoView {
                 }
             >
                 <div class="auth-card-head">
-                    <p class="auth-card-kicker">"PRIVATE RESEARCH WORKSPACE"</p>
                     <h2>{move || if register.get() { "创建研究空间" } else { "欢迎回来" }}</h2>
-                    <p>{move || if register.get() { "使用邀请码开通你的私人研究台。" } else { "登录后继续你的研究与跟踪。" }}</p>
                 </div>
                 <div class="auth-tabs" role="tablist" aria-label="账户入口">
                     <button
@@ -568,10 +558,11 @@ pub fn LoginPage(on_authenticated: Callback<()>) -> impl IntoView {
                         }
                     }}
                 </button>
+                // 登录页只留一句必要说明：这是邀请制工作区，忘记密码只能找管理员。
+                // 其余「私人工作区 / 记录仅账户内可见」之类的话不改变用户的任何操作。
                 {move || (!register.get()).then(|| view! {
                     <p class="auth-help">"邀请制工作区，忘记密码请联系管理员重置。"</p>
                 })}
-                <p class="auth-footnote"><Icon name="lock" />"你的研究记录仅在账户内可见"</p>
             </form>
         </main>
     }
@@ -757,7 +748,6 @@ fn WatchSection(on_research: Callback<String>) -> impl IntoView {
             <section class="data-panel watchlist-panel">
                 <div class="panel-titlebar">
                     <h2>"关注公司"</h2>
-                    <span class="section-status"><i></i>"持续监控"</span>
                 </div>
                 <div class="watchlist-form">
                     <div class="form-grid watch-form-grid">
@@ -1190,7 +1180,6 @@ fn PortfolioSection() -> impl IntoView {
         <section class="library-section">
             <div class="section-heading">
                 <div>
-                    <p class="section-kicker">"PORTFOLIO"</p>
                     <h2>"持仓与风控"</h2>
                     <p>"记录真实仓位，并把止损与止盈线放到同一个决策视图。"</p>
                 </div>
@@ -1338,13 +1327,8 @@ fn SettingsPage() -> impl IntoView {
     view! {
         <PageHeader title="设置" detail="通知与免打扰。开关在通知写入咽喉生效，后台作业无法绕过。" />
         <main class="page-content settings-page-content">
-            <div class="settings-overview">
-                <div>
-                    <SettingsGlyph kind="check" />
-                    <p><strong>"通知由你掌控"</strong><small>"重要风控信号始终优先于普通摘要。"</small></p>
-                </div>
-                <span class="section-status"><i></i>"保存后立即生效"</span>
-            </div>
+            // 页头已经说清这页是干什么的；再放一条"通知由你掌控 / 保存后立即生效"的
+            // 横幅只是把同一句话说第二遍。
             <div class="settings-grid">
                 <section class="settings-card settings-delivery-card">
                     <div class="settings-card-head"><h2>"通知类型"</h2></div>
@@ -1467,8 +1451,9 @@ fn Toggle(
 #[component]
 fn PageHeader(title: &'static str, detail: &'static str) -> impl IntoView {
     view! {
+        // 不放 "ECHO WORKSPACE" 之类的英文小标签——顶栏左上角已经写着 ECHO，
+        // 每页再复述一遍只是占掉标题上方的一行。
         <header class="page-header">
-            <p class="page-kicker">"ECHO WORKSPACE"</p>
             <h1>{title}</h1>
             <p>{detail}</p>
         </header>

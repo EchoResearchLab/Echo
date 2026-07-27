@@ -114,15 +114,6 @@
     justify-content: flex-start;
   }
 
-  .company-showcase-heading {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--sp-2);
-  }
-
-  .company-showcase-heading p {
-    text-align: left;
-  }
 }
 
 /* ── ≤760：顶栏与研究台重排 ───────────────────────────────────────── */
@@ -148,11 +139,6 @@
 
   .nav-item {
     padding: 0 var(--sp-3);
-  }
-
-  .nav-item::after {
-    right: var(--sp-3);
-    left: var(--sp-3);
   }
 
   .account-copy {
@@ -208,7 +194,7 @@
     z-index: 45;
     width: min(300px, 84vw);
     padding: var(--sp-4);
-    background: var(--paper-raised);
+    background: var(--glass-strong);
     box-shadow: var(--e-pop);
   }
 
@@ -234,36 +220,8 @@
     padding: 0 var(--sp-4);
   }
 
-  /* 编辑器里研究对象独占一行——和「深度报告 / 发送」抢同一行会被压成三个字。 */
-  .composer-footer {
-    flex-wrap: wrap;
-  }
-
-  .company-picker {
-    flex: 1 1 100%;
-    max-width: none;
-    margin-right: 0;
-  }
-
-  .composer-report {
-    margin-left: auto;
-  }
-
-  /* 窄屏只留信任标记：上下文文案与 hero 标题重复，先让位给内容。 */
-  .desk-toolbar {
-    justify-content: flex-end;
-  }
-
-  .desk-context {
-    display: none;
-  }
-
   .message.user .bubble {
     max-width: 94%;
-  }
-
-  .composer-meta > span:first-child {
-    display: none;
   }
 
   .val-bands {
@@ -272,23 +230,6 @@
 
   .company-showcase {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .research-intents {
-    /* 横向滑动而不是换行成四五行，首屏不被快捷入口吃掉。 */
-    flex-wrap: nowrap;
-    margin-inline: calc(-1 * var(--gutter));
-    padding-inline: var(--gutter);
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .research-intents::-webkit-scrollbar {
-    display: none;
-  }
-
-  .research-intents button {
-    flex: none;
   }
 
   .time-range {
@@ -315,8 +256,7 @@
     box-shadow: var(--e-1);
   }
 
-  .profile-actions,
-  .settings-overview {
+  .profile-actions {
     flex-direction: column;
     align-items: stretch;
   }
@@ -334,14 +274,8 @@
 
   .watch-star,
   .watch-more,
-  .session-item-delete,
-  .company-chip-clear {
+  .session-item-delete {
     min-width: var(--tap-min);
-    min-height: var(--tap-min);
-  }
-
-  .company-chip {
-    height: auto;
     min-height: var(--tap-min);
   }
 }

@@ -16,19 +16,16 @@ use crate::dialog::confirm_destructive;
 use crate::format;
 use crate::icons::{EchoArt, Icon};
 use echo_contracts::{
-    AnswerSource, AskRequest, AskResponse, CitationGuardView, CompanyResolveResponse,
-    CompanySearchItem, CompanySearchResponse, CompareLegView, CompareResponse, Decimal,
-    EarningsCalendarView, EvidenceView, GuardView, MutationResponse, ReportGenerateResponse,
-    ReportMode, ResearchSessionDetail, ResearchSessionResponse, ResearchSessionsResponse,
-    ResearchStreamEvent, ResearchStreamStage, ResearchStreamStageName, RouteView, ValuationView,
+    AnswerSource, AskRequest, AskResponse, CitationGuardView, CompareLegView, CompareResponse,
+    Decimal, EarningsCalendarView, EvidenceView, GuardView, MutationResponse,
+    ResearchSessionDetail, ResearchSessionResponse, ResearchSessionsResponse, ResearchStreamEvent,
+    ResearchStreamStage, ResearchStreamStageName, RouteView, ValuationView,
 };
 use leptos::*;
 
 /// 流式研究的整体超时窗口（毫秒）。一次性定时器，不随事件重置：多阶段研究本就该在这个
 /// 窗口内跑完，卡死比慢更值得暴露。
 const STREAM_TIMEOUT_MS: i32 = 120_000;
-/// 深度报告是单请求非流式调用，没有中途事件可判活，给一个更宽但仍然有限的窗口。
-const REPORT_TIMEOUT_MS: i32 = 240_000;
 
 /// 一轮的终态或进行态。`Streaming` 里的字段随 SSE 事件逐步填充。
 #[derive(Clone)]
@@ -51,9 +48,6 @@ enum TurnStatus {
     Archived(Box<ArchivedTurn>),
     Failed(String),
     Cancelled,
-    /// 深度报告——非流式单请求（`POST /api/report/generate`），进行中/完成两态。
-    ReportPending,
-    ReportDone(Box<ReportGenerateResponse>),
 }
 
 impl TurnStatus {
@@ -72,11 +66,6 @@ impl TurnStatus {
 
     fn is_streaming(&self) -> bool {
         matches!(self, Self::Streaming { .. })
-    }
-
-    /// 占用提交通道——流式研究进行中，或深度报告正在生成。
-    fn is_busy(&self) -> bool {
-        matches!(self, Self::Streaming { .. } | Self::ReportPending)
     }
 }
 
@@ -117,25 +106,22 @@ struct Turn {
     status: RwSignal<TurnStatus>,
     /// 仍在流式进行时持有取消句柄；终态后清空，避免悬空取消一个已结束的请求。
     handle: StoredValue<Option<api::StreamHandle>>,
-    /// 深度报告 turn 失败后重试要走报告通道，不能落回默认的 SSE 问答通道。
-    is_report: bool,
 }
 
 impl Turn {
-    fn new(id: u64, question: String, ticker: String, status: TurnStatus, is_report: bool) -> Self {
+    fn new(id: u64, question: String, ticker: String, status: TurnStatus) -> Self {
         Self {
             id,
             question: store_value(question),
             ticker: create_rw_signal(ticker),
             status: create_rw_signal(status),
             handle: store_value(None),
-            is_report,
         }
     }
 
     /// 主动取消：先中止底层请求，再落到终态。已是终态就什么都不做。
     fn cancel(&self) {
-        if !self.status.get_untracked().is_busy() {
+        if !self.status.get_untracked().is_streaming() {
             return;
         }
         if let Some(handle) = self.handle.get_value() {
@@ -188,19 +174,6 @@ pub(crate) fn decimal_text(value: Option<Decimal>) -> String {
     value
         .map(|decimal| decimal.normalize().to_string())
         .unwrap_or_else(|| "—".to_string())
-}
-
-/// 公司候选的展示标签——优先中文名，缺了退中文名/英文名/代码本身，不留空。
-fn company_display(name_zh: &str, name_en: Option<&str>, ticker: &str) -> String {
-    let name = non_empty(name_zh)
-        .or_else(|| name_en.and_then(non_empty))
-        .unwrap_or_else(|| ticker.to_string());
-    format!("{name} · {ticker}")
-}
-
-fn non_empty(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// 把一次研究请求接到类型化 SSE 流上：事件回来后写进这一轮自己的信号，
@@ -307,42 +280,8 @@ fn attach_stream(
     }
 }
 
-/// 深度报告的实际请求发送——非流式单请求，供首次提交与重试共用。
-fn fire_report_request(
-    turn: Turn,
-    session_id: Option<String>,
-    set_session_id: WriteSignal<Option<String>>,
-    on_persisted: Callback<()>,
-    on_activity: Callback<()>,
-) {
-    let mut req = AskRequest::minimal(turn.question.get_value(), turn.ticker.get_untracked());
-    req.session_id = session_id;
-    schedule_turn_timeout(
-        turn,
-        REPORT_TIMEOUT_MS,
-        "深度报告生成超时（4 分钟无返回），请重试。",
-    );
-    leptos::spawn_local(async move {
-        let outcome = api::post::<_, ReportGenerateResponse>("/api/report/generate", &req).await;
-        if !matches!(turn.status.get_untracked(), TurnStatus::ReportPending) {
-            return; // 已超时/已放弃等待，迟到结果不覆盖终态
-        }
-        match outcome {
-            Ok(response) => {
-                if response.session_id.is_some() {
-                    set_session_id.set(response.session_id.clone());
-                }
-                turn.status.set(TurnStatus::ReportDone(Box::new(response)));
-                on_persisted.call(());
-            }
-            Err(message) => turn.status.set(TurnStatus::Failed(message)),
-        }
-        on_activity.call(());
-    });
-}
-
-/// 重试：把已存在的 turn（取消/失败/完成态）原地重置，而不是追加新 turn——按 `is_report`
-/// 分流回原来的通道（SSE 问答 或 一次性深度报告），不会把报告失败重试成问答。
+/// 重试 / 重新生成：把已存在的 turn（取消、失败或已完成）原地重置再跑一遍，
+/// 而不是追加一条新 turn。
 fn restart_turn(
     turn: Turn,
     session_id: Option<String>,
@@ -351,13 +290,8 @@ fn restart_turn(
     on_activity: Callback<()>,
 ) {
     turn.handle.set_value(None);
-    if turn.is_report {
-        turn.status.set(TurnStatus::ReportPending);
-        fire_report_request(turn, session_id, set_session_id, on_persisted, on_activity);
-    } else {
-        turn.status.set(TurnStatus::streaming_default());
-        attach_stream(turn, session_id, set_session_id, on_persisted, on_activity);
-    }
+    turn.status.set(TurnStatus::streaming_default());
+    attach_stream(turn, session_id, set_session_id, on_persisted, on_activity);
 }
 
 /// 超时态——一轮在固定窗口内没到终态，视为卡死，主动取消并转失败可重试。
@@ -367,7 +301,7 @@ fn schedule_turn_timeout(turn: Turn, timeout_ms: i32, message: &'static str) {
     use wasm_bindgen::prelude::Closure;
 
     let closure = Closure::once(move || {
-        if !turn.status.get_untracked().is_busy() {
+        if !turn.status.get_untracked().is_streaming() {
             return;
         }
         if let Some(handle) = turn.handle.get_value() {
@@ -428,7 +362,11 @@ pub(crate) fn ValuationBand(v: ValuationView) -> impl IntoView {
     .into_view()
 }
 
-/// 路由意图 / 深度 / 置信度三个 chip——meta 到达即可展示，final 到达后原样复用。
+/// 路由意图 / 深度 / 置信度三个 chip。
+///
+/// 这三个 chip 原来常驻在答案卡顶部。那是路由器的内部状态，读答案的人不会因为它改变
+/// 任何决定，却每一轮都要先撞见它。现在只出现在折叠的证据面板里——想查依然查得到，
+/// 默认的阅读路径上不再有它。
 #[component]
 pub(crate) fn RouteChips(route: RouteView) -> impl IntoView {
     let conf = (route.confidence * 100.0).round() as u32;
@@ -573,14 +511,6 @@ const fn answer_source_label(source: AnswerSource) -> &'static str {
     }
 }
 
-/// 深度报告生成方式的中文标签——同上，仅 UI 展示。
-const fn report_mode_label(mode: ReportMode) -> &'static str {
-    match mode {
-        ReportMode::Model => "模型生成",
-        ReportMode::Local => "本地模板兜底",
-    }
-}
-
 /// 证据摘要文案——流式条与折叠面板共用同一套口径，两者高度一致，落地时不产生跳动。
 /// 只汇总真实到手的字段，缺的既不出现在摘要也不出现在面板里。
 fn evidence_summary(
@@ -619,6 +549,7 @@ fn EvidencePanel(
     sources: Vec<String>,
     guard: Option<GuardView>,
     #[prop(optional_no_strip)] citation: Option<CitationGuardView>,
+    #[prop(optional_no_strip)] route: Option<RouteView>,
     answer_source: Option<String>,
 ) -> impl IntoView {
     let has_content = valuation.is_some()
@@ -626,7 +557,8 @@ fn EvidencePanel(
         || earnings.is_some()
         || !sources.is_empty()
         || guard.is_some()
-        || citation.is_some();
+        || citation.is_some()
+        || route.is_some();
     if !has_content {
         return ().into_view();
     }
@@ -653,6 +585,7 @@ fn EvidencePanel(
                 <DataSources sources=sources />
                 {guard.map(|g| view! { <GuardBadge guard=g /> })}
                 {citation.map(|c| view! { <CitationBadge citation=c /> })}
+                {route.map(|r| view! { <RouteChips route=r /> })}
                 {answer_source.map(|s| view! { <p class="evidence-provenance">"作答来源 · " {s}</p> })}
             </div>
         </details>
@@ -689,7 +622,6 @@ fn EvidenceLiveStrip(
 #[component]
 fn StreamingCard(
     stage: Option<ResearchStreamStage>,
-    meta_route: Option<RouteView>,
     meta_completeness: Option<u8>,
     meta_sources_len: usize,
     delta_text: String,
@@ -708,10 +640,6 @@ fn StreamingCard(
     let current_stage_label = stage_label(stage.as_ref());
     view! {
         <div class="answer-card">
-            {meta_route.clone().map(|route| view! {
-                <div class="answer-head"><RouteChips route=route /></div>
-            })}
-
             <div class="answer-text-section">
                 <p class="stage-label" aria-live="polite">
                     <span class="stage-dot" aria-hidden="true"></span>
@@ -744,10 +672,18 @@ fn StreamingCard(
     }
 }
 
-/// 答案上的动作条：复制原文、重新生成。
+/// 答案上的动作条：复制原文、导出 Markdown、重新生成。
+///
+/// 导出原来只挂在深度报告卡上；报告入口收掉后导出下沉到每一条答案——研究结论要能带走，
+/// 这个能力不该跟着一个按钮一起消失。
 #[component]
-fn AnswerActions(text: Option<String>, on_regenerate: Callback<()>) -> impl IntoView {
+fn AnswerActions(
+    text: Option<String>,
+    #[prop(into)] ticker: String,
+    on_regenerate: Callback<()>,
+) -> impl IntoView {
     let (copied, set_copied) = create_signal(false);
+    let export = text.clone();
     view! {
         <div class="answer-actions">
             {text.map(|text| view! {
@@ -767,6 +703,24 @@ fn AnswerActions(text: Option<String>, on_regenerate: Callback<()>) -> impl Into
                     {move || if copied.get() { "已复制" } else { "复制" }}
                 </button>
             })}
+            {export.map(|markdown| {
+                let filename = if ticker.trim().is_empty() {
+                    "echo-研究.md".to_string()
+                } else {
+                    format!("{}-研究.md", ticker.trim())
+                };
+                view! {
+                    <button
+                        class="answer-action"
+                        title="导出为 Markdown"
+                        on:click=move |_| api::download_text_file(
+                            &filename,
+                            "text/markdown;charset=utf-8",
+                            &markdown,
+                        )
+                    ><Icon name="download" />"导出"</button>
+                }
+            })}
             <button
                 class="answer-action"
                 title="用同一个问题重新研究一次"
@@ -784,10 +738,6 @@ fn DoneCard(res: AskResponse, on_regenerate: Callback<()>) -> impl IntoView {
     let answer_text = res.answer.clone();
     view! {
         <div class="answer-card">
-            <div class="answer-head">
-                <RouteChips route=res.route.clone() />
-            </div>
-
             <div class="answer-text-section">
                 {match res.answer.clone() {
                     Some(text) => {
@@ -802,7 +752,7 @@ fn DoneCard(res: AskResponse, on_regenerate: Callback<()>) -> impl IntoView {
                 }}
             </div>
 
-            <AnswerActions text=answer_text on_regenerate=on_regenerate />
+            <AnswerActions text=answer_text ticker=res.ticker.clone() on_regenerate=on_regenerate />
 
             <SourceCards sources=res.sources.clone() />
 
@@ -813,6 +763,7 @@ fn DoneCard(res: AskResponse, on_regenerate: Callback<()>) -> impl IntoView {
                 sources=res.connected_sources.clone()
                 guard=res.fact_guard.clone()
                 citation=res.citation_guard.clone()
+                route=Some(res.route.clone())
                 answer_source=Some(answer_source_label(res.answer_source).to_string())
             />
         </div>
@@ -899,7 +850,6 @@ fn archive_to_turns(session: &ResearchSessionDetail, first_id: u64) -> Vec<Turn>
                 created_at: Some(created),
                 evidence: Some(evidence),
             })),
-            false,
         )];
     }
 
@@ -917,72 +867,9 @@ fn archive_to_turns(session: &ResearchSessionDetail, first_id: u64) -> Vec<Turn>
                     created_at: (index == 0).then(|| created.clone()),
                     evidence: (index == last).then(|| evidence.clone()),
                 })),
-                false,
             )
         })
         .collect()
-}
-
-/// 深度报告生成中——非流式单请求，无逐字增量，只给一个进行中提示。
-#[component]
-fn ReportPendingCard() -> impl IntoView {
-    view! {
-        <div class="answer-card">
-            <div class="answer-head">
-                <span class="ac-chip">"深度报告"</span>
-            </div>
-            <div class="answer-text-section">
-                <p class="stage-label" aria-live="polite">
-                    <span class="stage-dot" aria-hidden="true"></span>
-                    "正在生成深度报告（固定七段结构，通常需要 1–3 分钟）…"
-                    <span class="thinking-wave" aria-hidden="true">
-                        <i></i><i></i><i></i><i></i><i></i>
-                    </span>
-                </p>
-                <div class="thinking-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>
-            </div>
-        </div>
-    }
-}
-
-/// 深度报告完成态——固定七段结构的 Markdown + 复用的估值带/护栏，外加客户端导出。
-#[component]
-fn ReportCard(res: ReportGenerateResponse, on_regenerate: Callback<()>) -> impl IntoView {
-    let html = crate::markdown::render(&res.markdown);
-    let filename = format!("{}-深度报告.md", res.ticker);
-    let markdown = res.markdown.clone();
-    let copy_text = res.markdown.clone();
-    let download =
-        move |_| api::download_text_file(&filename, "text/markdown;charset=utf-8", &markdown);
-    view! {
-        <div class="answer-card">
-            <div class="answer-head">
-                <span class="ac-chip">"深度报告"</span>
-                <RouteChips route=res.route.clone() />
-            </div>
-
-            <div class="answer-text-section">
-                <div class="answer-text" inner_html=html></div>
-            </div>
-
-            <div class="answer-actions">
-                <button class="answer-action" title="下载 Markdown" on:click=download>
-                    <Icon name="download" />"下载 Markdown"
-                </button>
-                <AnswerActions text=Some(copy_text) on_regenerate=on_regenerate />
-            </div>
-
-            <EvidencePanel
-                valuation=Some(res.valuation.clone())
-                completeness=None
-                earnings=res.earnings.clone()
-                sources=Vec::new()
-                guard=res.fact_guard.clone()
-                citation=res.citation_guard.clone()
-                answer_source=Some(report_mode_label(res.mode).to_string())
-            />
-        </div>
-    }
 }
 
 /// 对话内双主体对比卡——结论优先，两腿证据（估值/完备度/来源/护栏）双栏排在下方，
@@ -996,11 +883,7 @@ fn CompareCard(res: CompareResponse, on_regenerate: Callback<()>) -> impl IntoVi
     let answer_text = res.answer.clone();
     view! {
         <div class="answer-card">
-            <div class="answer-head">
-                <span class="ac-chip">"双主体对比"</span>
-                <RouteChips route=res.route.clone() />
-            </div>
-
+            // 不放"双主体对比"标签：下面就是两列并排的证据，结构自己说得清楚。
             <div class="answer-text-section">
                 {match answer_html {
                     Some(html) => view! { <div class="answer-text" inner_html=html></div> }.into_view(),
@@ -1012,7 +895,11 @@ fn CompareCard(res: CompareResponse, on_regenerate: Callback<()>) -> impl IntoVi
                 }}
             </div>
 
-            <AnswerActions text=answer_text on_regenerate=on_regenerate />
+            <AnswerActions
+                text=answer_text
+                ticker=format!("{}-vs-{}", res.primary.ticker, res.peer.ticker)
+                on_regenerate=on_regenerate
+            />
 
             <div class="compare-columns">
                 <CompareLeg leg=res.primary.clone() />
@@ -1040,18 +927,8 @@ fn CompareLeg(leg: CompareLegView) -> impl IntoView {
 }
 
 #[component]
-fn RetryableMessage(
-    message: String,
-    cancelled: bool,
-    is_report: bool,
-    on_retry: Callback<()>,
-) -> impl IntoView {
-    let label = match (cancelled, is_report) {
-        // 深度报告是非流式请求：本地放弃等待不代表服务端停止了生成，说清楚这一点。
-        (true, true) => "已停止等待（服务端可能仍在生成，稍后可在研究历史里查看）",
-        (true, false) => "已取消",
-        (false, _) => "请求未成功",
-    };
+fn RetryableMessage(message: String, cancelled: bool, on_retry: Callback<()>) -> impl IntoView {
+    let label = if cancelled { "已取消" } else { "请求未成功" };
     view! {
         <div class="answer-card">
             <p class="echo-error">{label} {(!cancelled).then(|| view! { "：" {message.clone()} })}</p>
@@ -1149,13 +1026,6 @@ fn HistorySidebar(
     }
 }
 
-/// 提交走哪条通道——常规问答（SSE）还是一次性深度报告生成。
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SubmitMode {
-    Ask,
-    Report,
-}
-
 /// 让 textarea 随内容长高；上限由 CSS 的 `max-height` 兜住，超出后内部滚动。
 #[cfg(target_arch = "wasm32")]
 fn autosize(node: &web_sys::HtmlTextAreaElement) {
@@ -1203,17 +1073,10 @@ pub fn ResearchPage(
     on_navigate: Callback<Option<String>>,
 ) -> impl IntoView {
     let (question, set_question) = create_signal(String::new());
-    // 研究对象输入——公司名/代码皆可；`resolved` 是唯一可信来源，输入文本变化即失效。
-    let (company_query, set_company_query) = create_signal(String::new());
-    let (resolved, set_resolved) = create_signal(
-        initial_ticker
-            .clone()
-            .map(|ticker| (ticker.clone(), ticker)),
-    );
-    let (candidates, set_candidates) = create_signal(Vec::<CompanySearchItem>::new());
-    let (search_gen, set_search_gen) = create_signal(0u64);
-    let (resolving, set_resolving) = create_signal(false);
-    let (resolve_error, set_resolve_error) = create_signal(None::<String>);
+    // 当前会话锁定的研究主体。这不是一个让用户填的字段——界面上没有"研究对象"输入框，
+    // 主体一律由服务端从问题文本识别（`prepare_research_request` 的 resolve 链），
+    // 识别结果回填到这里，后续追问带上它，"那它的估值呢"才能承接到同一家公司。
+    let (subject, set_subject) = create_signal(initial_ticker.clone().unwrap_or_default());
     let thread = create_rw_signal(Vec::<Turn>::new());
     let (sidebar_collapsed, set_sidebar_collapsed) = create_signal(narrow_viewport());
     let (next_id, set_next_id) = create_signal(0u64);
@@ -1256,11 +1119,11 @@ pub fn ResearchPage(
                 Ok(response) => match response.session {
                     Some(session) => {
                         let first_id = next_id.get_untracked();
-                        // 恢复研究对象确认态——续接历史会话的追问不需要重填公司。
+                        // 恢复主体——续接历史会话的追问要能承接同一家公司。
                         if let Some(ticker) =
                             session.ticker.clone().filter(|value| !value.is_empty())
                         {
-                            set_resolved.set(Some((ticker.clone(), ticker)));
+                            set_subject.set(ticker);
                         }
                         let restored = archive_to_turns(&session, first_id);
                         set_next_id.set(first_id + restored.len() as u64);
@@ -1298,8 +1161,8 @@ pub fn ResearchPage(
         }
     });
 
-    // 任一轮仍在流式研究或深度报告生成中都视为 pending——禁止再次提交，避免并发请求的结果错位。
-    let pending = move || thread.get().iter().any(|turn| turn.status.get().is_busy());
+    // 任一轮仍在流式研究中都视为 pending——禁止再次提交，避免并发请求的结果错位。
+    let pending = move || thread.get().iter().any(|turn| turn.status.get().is_streaming());
     let on_persisted = Callback::new(move |_| sessions.refetch());
     let on_activity = Callback::new(move |_| activity.update(|value| *value += 1));
 
@@ -1321,9 +1184,8 @@ pub fn ResearchPage(
         });
     }
 
-    // 服务端从问题里识别出主体后（meta 回填了最后一轮的 ticker），若 composer 还没有
-    // 确认公司，就把它补成 chip——追问自然续接。只看最后一轮：不许把更早轮次的旧公司
-    // 回填到一个正在等服务端识别的新问题上；对比轮（"A vs B"）也不回填。
+    // 服务端识别出主体后（meta 回填了最后一轮的 ticker）把它记下来，后续追问带上去。
+    // 只看最后一轮，且对比轮（"A vs B"）不回填——那不是单一主体。
     create_effect(move |_| {
         let latest = thread.get().last().and_then(|turn| {
             let ticker = turn.ticker.get();
@@ -1331,45 +1193,11 @@ pub fn ResearchPage(
             (!ticker.is_empty() && !ticker.contains(" vs ")).then(|| ticker.to_string())
         });
         if let Some(ticker) = latest {
-            if resolved.get_untracked().is_none() {
-                set_resolved.set(Some((ticker.clone(), ticker)));
+            if subject.get_untracked() != ticker {
+                set_subject.set(ticker);
             }
         }
     });
-
-    // 研究对象输入变化——本地 DB 候选（便宜）实时查，旧一代请求用 gen 挡掉不覆盖新结果。
-    let on_query_input = move |ev| {
-        let value = event_target_value(&ev);
-        set_company_query.set(value.clone());
-        set_resolved.set(None);
-        set_resolve_error.set(None);
-        let query = value.trim().to_string();
-        let generation = search_gen.get() + 1;
-        set_search_gen.set(generation);
-        if query.is_empty() {
-            set_candidates.set(Vec::new());
-            return;
-        }
-        leptos::spawn_local(async move {
-            let path = format!(
-                "/api/companies/search?q={}&limit=8",
-                api::encode_query(&query)
-            );
-            if let Ok(response) = api::get::<CompanySearchResponse>(&path).await {
-                if search_gen.get_untracked() == generation {
-                    set_candidates.set(response.companies);
-                }
-            }
-        });
-    };
-
-    let select_candidate = move |item: CompanySearchItem| {
-        let label = company_display(&item.name_zh, item.name_en.as_deref(), &item.ticker);
-        set_company_query.set(label.clone());
-        set_resolved.set(Some((item.ticker, label)));
-        set_candidates.set(Vec::new());
-        set_resolve_error.set(None);
-    };
 
     // 提交后把编辑器高度收回一行——不然清空文本后 textarea 还撑着上一条长问题的高度。
     let reset_composer_height = move || {
@@ -1379,106 +1207,29 @@ pub fn ResearchPage(
         }
     };
 
-    // 确认好的候选（点选或 resolve 验证成功）才真正起一轮研究。研究对象在会话内保持
-    // 确认态不清空——追问同一家公司是最高频路径，绝不让用户每轮重填；换公司点掉 chip 即可。
-    let fire = move |mode: SubmitMode, target_ticker: String, target_label: String| {
+    // 提交一轮研究。主体不由用户填：`subject` 有值（服务端上一轮识别出来的，或从资料库
+    // 带过来的）就带上，否则交给服务端从问题文本识别；识别失败会以流错误诚实返回。
+    let submit = move || {
+        if pending() {
+            return;
+        }
         let q = question.get().trim().to_string();
-        let q = if q.is_empty() && mode == SubmitMode::Report {
-            "生成深度研究报告".to_string()
-        } else {
-            q
-        };
         if q.is_empty() {
             return;
         }
         let id = next_id.get();
         set_next_id.set(id + 1);
-        let session_id = current_session_id.get();
-        let turn = match mode {
-            SubmitMode::Ask => Turn::new(
-                id,
-                q,
-                target_ticker.clone(),
-                TurnStatus::streaming_default(),
-                false,
-            ),
-            SubmitMode::Report => Turn::new(
-                id,
-                q,
-                target_ticker.clone(),
-                TurnStatus::ReportPending,
-                true,
-            ),
-        };
+        let turn = Turn::new(id, q, subject.get(), TurnStatus::streaming_default());
         thread.update(|turns| turns.push(turn));
-        match mode {
-            SubmitMode::Ask => attach_stream(
-                turn,
-                session_id,
-                set_current_session_id,
-                on_persisted,
-                on_activity,
-            ),
-            SubmitMode::Report => fire_report_request(
-                turn,
-                session_id,
-                set_current_session_id,
-                on_persisted,
-                on_activity,
-            ),
-        }
+        attach_stream(
+            turn,
+            current_session_id.get(),
+            set_current_session_id,
+            on_persisted,
+            on_activity,
+        );
         set_question.set(String::new());
         reset_composer_height();
-        // 显式确认过的公司 chip 常驻；主体留给服务端识别时（空 ticker）不放假 chip，
-        // 等 meta 回填后由 thread 效应补上。
-        if !target_ticker.is_empty() {
-            set_resolved.set(Some((target_ticker, target_label)));
-        }
-        set_company_query.set(String::new());
-        set_candidates.set(Vec::new());
-    };
-
-    let submit = move |mode: SubmitMode| {
-        if pending() || resolving.get() {
-            return;
-        }
-        if mode == SubmitMode::Ask && question.get().trim().is_empty() {
-            return;
-        }
-        if let Some((target_ticker, target_label)) = resolved.get() {
-            fire(mode, target_ticker, target_label);
-            return;
-        }
-        let query = company_query.get().trim().to_string();
-        if query.is_empty() {
-            // 没有显式研究对象——把识别交给服务端（resolve 链跑问题文本；
-            // 双主体对比问题也在服务端分流）。识别失败会以流错误诚实返回。
-            fire(mode, String::new(), String::new());
-            return;
-        }
-        set_resolving.set(true);
-        set_resolve_error.set(None);
-        leptos::spawn_local(async move {
-            let path = format!("/api/companies/resolve?q={}", api::encode_query(&query));
-            let outcome = api::get::<CompanyResolveResponse>(&path).await;
-            set_resolving.set(false);
-            match outcome {
-                Ok(response) => match response.company {
-                    Some(company) => {
-                        let label = company_display(
-                            &company.name_zh,
-                            company.name_en.as_deref(),
-                            &company.ticker,
-                        );
-                        fire(mode, company.ticker, label);
-                    }
-                    None => set_resolve_error.set(Some(format!(
-                        "未能把「{query}」识别为可研究的公司，请换个更准确的名称或代码。"
-                    ))),
-                },
-                Err(message) => set_resolve_error.set(Some(message)),
-            }
-        });
     };
 
     // 停止生成：作用在当前正在跑的那一轮上。
@@ -1486,7 +1237,7 @@ pub fn ResearchPage(
         if let Some(turn) = thread
             .get_untracked()
             .into_iter()
-            .find(|turn| turn.status.get_untracked().is_busy())
+            .find(|turn| turn.status.get_untracked().is_streaming())
         {
             turn.cancel();
         }
@@ -1494,29 +1245,12 @@ pub fn ResearchPage(
 
     let has_thread = move || !thread.get().is_empty();
     let awaiting_session = initial_session.is_some();
-    let intent_prompts: [(&str, &str); 5] = [
-        ("商业模式", "分析这家公司的商业模式与核心增长驱动"),
-        ("盈利质量", "分析这家公司的盈利质量、现金流与会计风险"),
-        ("竞争格局", "分析这家公司的竞争格局、护城河与份额变化"),
-        ("估值概率", "基于最新基本面给出熊、基准、牛三种估值情景"),
-        ("证伪条件", "列出这家公司当前论点最关键、可观察的证伪条件"),
-    ];
     // 首屏的高频研究入口：只给公司与问题，不编造"12 条证据"这类没有来源的数字。
-    let curated: [(&str, &str, &str, &str); 4] = [
-        (
-            "腾讯控股",
-            "0700.HK",
-            "is-tencent",
-            "腾讯当前的估值便宜吗？",
-        ),
-        ("苹果公司", "AAPL", "is-apple", "苹果的盈利质量正在变化吗？"),
-        ("英伟达", "NVDA", "is-nvidia", "英伟达的护城河能维持多久？"),
-        (
-            "阿里巴巴",
-            "9988.HK",
-            "is-alibaba",
-            "什么会证伪阿里巴巴的复苏？",
-        ),
+    let curated: [(&str, &str, &str); 4] = [
+        ("腾讯控股", "0700.HK", "腾讯当前的估值便宜吗？"),
+        ("苹果公司", "AAPL", "苹果的盈利质量正在变化吗？"),
+        ("英伟达", "NVDA", "英伟达的护城河能维持多久？"),
+        ("阿里巴巴", "9988.HK", "什么会证伪阿里巴巴的复苏？"),
     ];
 
     view! {
@@ -1531,18 +1265,8 @@ pub fn ResearchPage(
             />
         // ── Desk ──
         <main class=move || if has_thread() { "desk has-thread" } else { "desk" }>
-            <div class="desk-toolbar">
-                <div class="desk-context">
-                    <span class="desk-context-mark" aria-hidden="true"></span>
-                    <span>
-                        <small>{move || if has_thread() { "ACTIVE RESEARCH" } else { "NEW RESEARCH" }}</small>
-                        <strong>{move || if has_thread() { "证据研究会话" } else { "开始一段新的研究" }}</strong>
-                    </span>
-                </div>
-                <div class="desk-toolbar-meta">
-                    <span class="trust-chip"><i></i>"数字护栏开启"</span>
-                </div>
-            </div>
+            // 对话区不放状态条——"证据研究会话""数字护栏开启"这类文案对用户不产生任何
+            // 决策价值，只是噪声。护栏状态在答案的证据面板里有真实数字。
             // conversation thread
             <div node_ref=conversation_ref class=move || if has_thread() { "conversation" } else { "conversation is-empty" }>
                 {move || if !has_thread() {
@@ -1569,39 +1293,20 @@ pub fn ResearchPage(
                                     <span class="line-2">"都有证据。"</span>
                                 </h1>
                             </div>
+                            // 空态只留一层脚手架：标题 + 四个真实可点的研究入口。
+                            // 原来的「研究主题」快捷词（"分析这家公司的…"）没有主体，
+                            // 在没有公司选择器之后点了必定识别失败，属于会骗人的入口，一并去掉。
                             <div class="research-launch-support">
-                                <div class="research-intents" aria-label="研究主题快捷入口">
-                                    {intent_prompts.into_iter().map(|(label, prompt)| view! {
-                                        <button on:click=move |_| {
-                                            set_question.set(prompt.to_string());
-                                            #[cfg(target_arch = "wasm32")]
-                                            if let Some(node) = composer_ref.get_untracked() {
-                                                let _ = node.focus();
-                                                autosize(&node);
-                                            }
-                                        }>{label}</button>
-                                    }).collect_view()}
-                                </div>
-                                <section class="company-showcase-section" aria-labelledby="popular-research-title">
-                                    <header class="company-showcase-heading">
-                                        <div>
-                                            <span class="company-showcase-kicker">"CURATED RESEARCH"</span>
-                                            <h2 id="popular-research-title">"常用研究"</h2>
-                                        </div>
-                                        <p>"从高频判断开始，或在下方直接提出你的问题。"</p>
-                                    </header>
+                                <section class="company-showcase-section" aria-label="常用研究入口">
                                     <div class="company-showcase">
-                                        {curated.into_iter().map(|(name, ticker, logo, prompt)| {
+                                        {curated.into_iter().map(|(name, ticker, prompt)| {
                                             let initial = name.chars().next().unwrap_or('E').to_string();
                                             view! {
                                                 <button
                                                     class="company-card"
                                                     aria-label=format!("研究 {name} {ticker}：{prompt}")
                                                     on:click=move |_| {
-                                                        set_resolved.set(Some((
-                                                            ticker.to_string(),
-                                                            format!("{name} · {ticker}"),
-                                                        )));
+                                                        set_subject.set(ticker.to_string());
                                                         set_question.set(prompt.to_string());
                                                         #[cfg(target_arch = "wasm32")]
                                                         if let Some(node) = composer_ref.get_untracked() {
@@ -1611,7 +1316,7 @@ pub fn ResearchPage(
                                                     }
                                                 >
                                                     <span class="company-card-head">
-                                                        <i class=format!("company-logo {logo}")>{initial}</i>
+                                                        <i class="company-logo">{initial}</i>
                                                         <span><strong>{name}</strong><small>{ticker}</small></span>
                                                     </span>
                                                     <span class="company-question">{prompt}</span>
@@ -1664,12 +1369,11 @@ pub fn ResearchPage(
                                             <div class="bubble assistant-bubble">
                                                 {move || match turn.status.get() {
                                                     TurnStatus::Streaming {
-                                                        stage, meta_route, meta_completeness,
+                                                        stage, meta_completeness,
                                                         meta_sources, delta_text, guard, ..
                                                     } => view! {
                                                         <StreamingCard
                                                             stage=stage
-                                                            meta_route=meta_route
                                                             meta_completeness=meta_completeness
                                                             meta_sources_len=meta_sources.len()
                                                             delta_text=delta_text
@@ -1685,15 +1389,10 @@ pub fn ResearchPage(
                                                     TurnStatus::Archived(archived) => view! {
                                                         <HistoryCard turn=*archived />
                                                     }.into_view(),
-                                                    TurnStatus::ReportPending => view! { <ReportPendingCard /> }.into_view(),
-                                                    TurnStatus::ReportDone(response) => view! {
-                                                        <ReportCard res=*response on_regenerate=on_retry />
-                                                    }.into_view(),
                                                     TurnStatus::Failed(message) => view! {
                                                         <RetryableMessage
                                                             message=message
                                                             cancelled=false
-                                                            is_report=turn.is_report
                                                             on_retry=on_retry
                                                         />
                                                     }.into_view(),
@@ -1701,7 +1400,6 @@ pub fn ResearchPage(
                                                         <RetryableMessage
                                                             message=String::new()
                                                             cancelled=true
-                                                            is_report=turn.is_report
                                                             on_retry=on_retry
                                                         />
                                                     }.into_view(),
@@ -1716,7 +1414,9 @@ pub fn ResearchPage(
                 }}
             </div>
 
-            // ── Composer（贴底常驻；空态与对话态同一位置，首次提交不跳位）──
+            // ── 编辑器（贴底常驻；空态与对话态同一位置，首次提交不跳位）──
+            // 里面只有一个输入框和一个按钮：没有研究对象选择器（主体由服务端识别）、
+            // 没有第二条提交通道、没有快捷键说明和免责小字。
             <div class="composer">
                 <div class="composer-panel">
                     <textarea
@@ -1732,122 +1432,34 @@ pub fn ResearchPage(
                         on:keydown=move |ev| {
                             if ev.key() == "Enter" && !ev.shift_key() {
                                 ev.prevent_default();
-                                submit(SubmitMode::Ask);
+                                submit();
                             }
                         }
-                        placeholder="输入公司名、代码，或直接问出你的判断"
+                        placeholder="问一个关于公司的问题"
                         aria-label="研究问题"
                         rows="1"
                     />
-                    <div class="composer-footer">
-                        <div class="company-picker">
-                            {move || match resolved.get() {
-                                // 已确认研究对象——chip 常驻，追问免重填；点 × 更换公司。
-                                Some((_, label)) => view! {
-                                    <div class="company-chip">
-                                        <span class="company-chip-label" title=label.clone()>{label}</span>
-                                        <button
-                                            class="company-chip-clear"
-                                            title="更换研究对象"
-                                            aria-label="更换研究对象"
-                                            on:click=move |_| {
-                                                set_resolved.set(None);
-                                                set_company_query.set(String::new());
-                                            }
-                                        ><Icon name="close" /></button>
-                                    </div>
-                                }.into_view(),
-                                None => view! {
-                                    <input
-                                        class="company-input"
-                                        prop:value=company_query
-                                        on:input=on_query_input
-                                        on:keydown=move |ev| {
-                                            if ev.key() == "Enter" {
-                                                submit(SubmitMode::Ask);
-                                            } else if ev.key() == "Escape" && !candidates.get_untracked().is_empty() {
-                                                ev.stop_propagation();
-                                                set_candidates.set(Vec::new());
-                                            }
-                                        }
-                                        placeholder="研究对象（可留空，自动从问题识别）"
-                                        aria-label="研究对象"
-                                        disabled=resolving
-                                        role="combobox"
-                                        aria-expanded=move || !candidates.get().is_empty()
-                                        aria-autocomplete="list"
-                                    />
-                                }.into_view(),
-                            }}
-                            {move || resolving.get().then(|| view! {
-                                <span class="company-status">"核实中…"</span>
-                            })}
-                            {move || {
-                                let items = candidates.get();
-                                if items.is_empty() {
-                                    view! {}.into_view()
-                                } else {
-                                    view! {
-                                        <div class="company-dropdown" role="listbox">
-                                            {items.into_iter().map(|item| {
-                                                let label = company_display(&item.name_zh, item.name_en.as_deref(), &item.ticker);
-                                                let industry = item.industry.clone();
-                                                let pick = item.clone();
-                                                view! {
-                                                    <button
-                                                        type="button"
-                                                        class="company-item"
-                                                        role="option"
-                                                        on:click=move |_| select_candidate(pick.clone())
-                                                    >
-                                                        <span class="company-item-name">{label}</span>
-                                                        {industry.map(|value| view! { <span class="company-item-industry">{value}</span> })}
-                                                    </button>
-                                                }
-                                            }).collect_view()}
-                                        </div>
-                                    }.into_view()
-                                }
-                            }}
-                        </div>
-                        <button
-                            class="composer-report"
-                            on:click=move |_| submit(SubmitMode::Report)
-                            disabled=move || pending() || resolving.get()
-                            title="生成固定七段结构的深度研究报告"
-                            aria-label="生成深度研究报告"
-                        ><span aria-hidden="true"><Icon name="sparkle" /></span>"深度报告"</button>
-                        // 生成中同一位置换成停止——用户找刹车不该翻回上面的卡片。
-                        {move || if pending() {
-                            view! {
-                                <button
-                                    class="composer-send is-stop"
-                                    on:click=move |_| stop_active()
-                                    title="停止生成"
-                                    aria-label="停止生成"
-                                ><Icon name="stop" /></button>
-                            }
-                        } else {
-                            view! {
-                                <button
-                                    class="composer-send"
-                                    on:click=move |_| submit(SubmitMode::Ask)
-                                    disabled=move || resolving.get() || question.get().trim().is_empty()
-                                    title="发送（Enter）"
-                                    aria-label="发送研究请求"
-                                ><Icon name="arrow-up" /></button>
-                            }
-                        }}
-                    </div>
-                    <div class="feedback-slot" aria-live="polite">
-                        {move || resolve_error.get().map(|message| view! {
-                            <p class="company-error" role="alert">{message}</p>
-                        })}
-                    </div>
-                </div>
-                <div class="composer-meta">
-                    <span>"Echo 可能出错，关键结论请结合证据面板核验。"</span>
-                    <span class="composer-shortcut"><kbd>"Enter"</kbd>" 发送 · "<kbd>"Shift"</kbd><kbd>"Enter"</kbd>" 换行"</span>
+                    // 生成中同一位置换成停止——用户找刹车不该翻回上面的卡片。
+                    {move || if pending() {
+                        view! {
+                            <button
+                                class="composer-send is-stop"
+                                on:click=move |_| stop_active()
+                                title="停止生成"
+                                aria-label="停止生成"
+                            ><Icon name="stop" /></button>
+                        }
+                    } else {
+                        view! {
+                            <button
+                                class="composer-send"
+                                on:click=move |_| submit()
+                                disabled=move || question.get().trim().is_empty()
+                                title="发送（Enter 发送，Shift + Enter 换行）"
+                                aria-label="发送研究请求"
+                            ><Icon name="arrow-up" /></button>
+                        }
+                    }}
                 </div>
             </div>
         </main>

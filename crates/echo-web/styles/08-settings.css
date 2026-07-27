@@ -7,40 +7,6 @@
   gap: var(--sp-6);
 }
 
-.settings-overview {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-5);
-  padding: var(--sp-5) var(--sp-6);
-  border: 1px solid var(--line-1);
-  border-radius: var(--r-lg);
-  background: var(--paper-raised);
-  box-shadow: var(--e-1);
-}
-
-.settings-overview > div {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-4);
-  min-width: 0;
-}
-
-.settings-overview p {
-  display: grid;
-  gap: 2px;
-}
-
-.settings-overview strong {
-  font-size: var(--fs-15);
-  font-weight: 600;
-}
-
-.settings-overview small {
-  color: var(--ink-3);
-  font-size: var(--fs-13);
-}
-
 .settings-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
@@ -224,7 +190,7 @@
   border-top: 1px solid var(--line-1);
   background: linear-gradient(
     180deg,
-    rgba(247, 248, 245, 0) 0%,
+    rgba(245, 245, 247, 0) 0%,
     var(--paper-canvas) 40%
   );
 }

@@ -24,7 +24,13 @@ body {
   letter-spacing: var(--tracking-tight);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: var(--paper-canvas);
+  /* 底层不是纯色：两片极弱的品牌光晕给毛玻璃一点可折射的东西，否则模糊一片纯色
+     与不透明白毫无区别。强度压到几乎看不见——它的作用是让材质成立，不是当装饰。 */
+  background:
+    radial-gradient(1100px 760px at 88% -8%, rgba(0, 113, 227, 0.05), transparent 68%),
+    radial-gradient(900px 620px at 4% 104%, rgba(0, 113, 227, 0.032), transparent 70%),
+    var(--paper-canvas);
+  background-attachment: fixed;
 }
 
 /* 金融数字统一等宽，表格与估值区不会因数字宽度跳动。 */

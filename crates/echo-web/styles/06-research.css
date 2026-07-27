@@ -12,13 +12,17 @@
 }
 
 /* ── 会话历史 ───────────────────────────────────────────────────────── */
+/* 侧栏与顶栏同一层材质：半透明 + 模糊，让底层的品牌光晕透上来，
+   而不是在画布上再贴一块不同的灰。 */
 .research-sidebar {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   min-height: 0;
   padding: var(--sp-5) var(--sp-4);
-  border-right: 1px solid var(--line-1);
-  background: var(--paper-canvas);
+  border-right: 1px solid var(--glass-line);
+  background: var(--glass);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   transition: grid-template-columns var(--dur-3) var(--ease-out);
 }
 
@@ -241,60 +245,6 @@
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
-}
-
-.desk-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-4);
-  padding: var(--sp-3) var(--gutter);
-  border-bottom: 1px solid var(--line-1);
-}
-
-.desk-context {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  min-width: 0;
-}
-
-.desk-context-mark {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: var(--r-full);
-  background: var(--brand-400);
-  box-shadow: 0 0 0 4px var(--brand-tint);
-}
-
-.desk-context > span {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-
-.desk-context small {
-  color: var(--ink-4);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: var(--tracking-kicker);
-}
-
-.desk-context strong {
-  overflow: hidden;
-  color: var(--ink-2);
-  font-size: var(--fs-13);
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.desk-toolbar-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  flex: none;
 }
 
 /* ── 对话流 ─────────────────────────────────────────────────────────── */
@@ -994,7 +944,7 @@
 }
 
 .evidence-panel.has-hard {
-  border-color: rgba(179, 38, 30, 0.24);
+  border-color: var(--danger-line);
 }
 
 .evidence-panel.has-hard .evidence-summary-text {
@@ -1131,75 +1081,12 @@
   position: relative;
   z-index: 1;
   display: grid;
-  gap: var(--sp-9);
-  margin-top: var(--sp-7);
+  margin-top: var(--sp-8);
 }
 
-.research-intents {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
-}
-
-.research-intents button {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
-  min-height: var(--ctl-md);
-  padding: 0 var(--sp-4);
-  color: var(--ink-2);
-  font-size: var(--fs-13);
-  font-weight: 550;
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-full);
-  background: var(--paper-raised);
-  transition:
-    color var(--dur-1) linear,
-    border-color var(--dur-1) linear,
-    background-color var(--dur-1) linear,
-    transform var(--dur-1) var(--ease-out);
-}
-
-.research-intents button span {
-  color: var(--brand-400);
-  font-size: var(--fs-12);
-}
-
-.research-intents button:hover {
-  color: var(--brand-ink);
-  border-color: var(--brand-200);
-  background: var(--brand-050);
-  transform: translateY(-1px);
-}
-
-.research-intents button:active {
-  transform: translateY(0);
-}
-
-/* ── 常用研究 ───────────────────────────────────────────────────────── */
+/* ── 常用研究入口 ───────────────────────────────────────────────────── */
 .company-showcase-section {
   display: grid;
-  gap: var(--sp-5);
-}
-
-.company-showcase-heading {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--sp-6);
-  padding-bottom: var(--sp-4);
-  border-bottom: 1px solid var(--line-1);
-}
-
-.company-showcase-heading h2 {
-  margin-top: var(--sp-2);
-  font-size: var(--fs-18);
-}
-
-.company-showcase-heading p {
-  color: var(--ink-4);
-  font-size: var(--fs-13);
-  text-align: right;
 }
 
 .company-showcase {
@@ -1240,30 +1127,21 @@
   gap: var(--sp-3);
 }
 
+/* 首字母徽标一律中性灰。原来四家公司各给一个品牌色（腾讯蓝/英伟达绿/阿里橙），
+   在首屏摆出四个互不相干的颜色——其中的蓝还会被当成"可点的蓝"，绿会被当成"涨"。
+   颜色在这个产品里是有职责的，不外借给装饰。 */
 .company-logo {
   display: grid;
   place-items: center;
   flex: none;
   width: 34px;
   height: 34px;
-  color: #fff;
+  color: var(--ink-2);
   font-size: var(--fs-13);
   font-style: normal;
   font-weight: 700;
   border-radius: var(--r-full);
-}
-
-.company-logo.is-tencent {
-  background: #2c7ad6;
-}
-.company-logo.is-apple {
-  background: #23262a;
-}
-.company-logo.is-nvidia {
-  background: #4f9333;
-}
-.company-logo.is-alibaba {
-  background: #d9631f;
+  background: var(--paper-inset);
 }
 
 .company-card-head > span {
@@ -1333,27 +1211,33 @@
   /* 内容滚到编辑器下方时给一段渐隐，不做硬切。 */
   background: linear-gradient(
     180deg,
-    rgba(247, 248, 245, 0) 0%,
+    rgba(245, 245, 247, 0) 0%,
     var(--paper-canvas) 22%
   );
 }
 
+/* 编辑器是唯一常驻的输入工作区，用玻璃把它和滚动的内容分层。
+   textarea 与发送按钮同一行：文本在左自适应，按钮贴右下角。 */
 .composer-panel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-3) var(--sp-3) var(--sp-4);
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-lg);
-  background: var(--paper-raised);
-  box-shadow: var(--e-2);
+  align-items: end;
+  padding: var(--sp-3) var(--sp-3) var(--sp-3) var(--sp-5);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-xl);
+  background: var(--glass-strong);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--e-2), var(--glass-sheen);
   transition:
     border-color var(--dur-1) linear,
     box-shadow var(--dur-2) var(--ease-out);
 }
 
 .composer-panel:focus-within {
-  border-color: var(--brand-200);
-  box-shadow: var(--e-2), 0 0 0 3px var(--brand-ring);
+  border-color: rgba(0, 113, 227, 0.30);
+  box-shadow: var(--e-2), var(--glass-sheen), 0 0 0 3px var(--brand-ring);
 }
 
 .composer textarea {
@@ -1374,178 +1258,7 @@
   box-shadow: none;
 }
 
-.composer-footer {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-}
-
-.composer-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-4);
-  padding: var(--sp-2) var(--sp-1) 0;
-  color: var(--ink-4);
-  font-size: var(--fs-11);
-}
-
-.composer-shortcut {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  flex: none;
-  white-space: nowrap;
-}
-
-kbd {
-  padding: 1px 5px;
-  font-family: inherit;
-  font-size: 10px;
-  border: 1px solid var(--line-1);
-  border-radius: var(--r-xs);
-  background: var(--paper-sunken);
-}
-
-/* ── 研究对象选择 ───────────────────────────────────────────────────── */
-/* 研究对象是可选的次要输入——给它上限宽度，别让它抢走整行视觉重量。 */
-.company-picker {
-  position: relative;
-  flex: 1 1 auto;
-  min-width: 0;
-  max-width: 320px;
-  margin-right: auto;
-}
-
-.company-input {
-  min-height: var(--ctl-sm);
-  padding: 0 var(--sp-3);
-  font-size: var(--fs-13);
-  border-color: var(--line-1);
-  border-radius: var(--r-sm);
-  background: var(--paper-canvas);
-}
-
-.company-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1);
-  height: var(--ctl-sm);
-  padding: 0 var(--sp-1) 0 var(--sp-3);
-  border-radius: var(--r-full);
-  background: var(--brand-tint);
-}
-
-.company-chip-label {
-  overflow: hidden;
-  max-width: 26ch;
-  color: var(--brand-800);
-  font-size: var(--fs-12);
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.company-chip-clear {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 22px;
-  height: 22px;
-  color: var(--brand-700);
-  font-size: var(--fs-13);
-  border-radius: var(--r-full);
-  transition: background-color var(--dur-1) linear;
-}
-
-.company-chip-clear:hover {
-  background: rgba(255, 255, 255, 0.7);
-}
-
-.company-status {
-  margin-left: var(--sp-2);
-  color: var(--ink-4);
-  font-size: var(--fs-12);
-}
-
-.company-dropdown {
-  position: absolute;
-  bottom: calc(100% + var(--sp-2));
-  left: 0;
-  z-index: 40;
-  display: grid;
-  width: min(420px, 100%);
-  max-height: 268px;
-  overflow-y: auto;
-  padding: var(--sp-2);
-  border: 1px solid var(--line-1);
-  border-radius: var(--r-md);
-  background: var(--paper-raised);
-  box-shadow: var(--e-pop);
-  animation: popoverIn var(--dur-2) var(--ease-out) both;
-}
-
-.company-item {
-  display: grid;
-  gap: 2px;
-  padding: var(--sp-3);
-  text-align: left;
-  border-radius: var(--r-xs);
-  transition: background-color var(--dur-1) linear;
-}
-
-.company-item:hover {
-  background: var(--brand-050);
-}
-
-.company-item-name {
-  color: var(--ink-1);
-  font-size: var(--fs-13);
-  font-weight: 550;
-}
-
-.company-item-industry {
-  color: var(--ink-4);
-  font-size: var(--fs-11);
-}
-
-.company-error {
-  padding: 0 var(--sp-1);
-}
-
-/* ── 发送 / 停止 / 深度报告 ─────────────────────────────────────────── */
-.composer-report {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
-  flex: none;
-  min-height: var(--ctl-sm);
-  padding: 0 var(--sp-3);
-  color: var(--ink-2);
-  font-size: var(--fs-13);
-  font-weight: 550;
-  white-space: nowrap;
-  border-radius: var(--r-sm);
-  transition: color var(--dur-1) linear, background-color var(--dur-1) linear;
-}
-
-.composer-report span {
-  color: var(--brand-400);
-}
-
-.composer-report:hover:not(:disabled) {
-  color: var(--brand-ink);
-  background: var(--brand-050);
-}
-
-.composer-report:disabled {
-  color: var(--ink-4);
-}
-
-.composer-report:disabled span {
-  color: var(--ink-4);
-}
-
+/* ── 发送 / 停止 ────────────────────────────────────────────────────── */
 .composer-send {
   display: grid;
   place-items: center;
@@ -1599,7 +1312,7 @@ kbd {
   padding: var(--sp-3) var(--gutter) var(--sp-6);
   background: linear-gradient(
     180deg,
-    rgba(247, 248, 245, 0) 0%,
+    rgba(245, 245, 247, 0) 0%,
     var(--paper-canvas) 24%
   );
 }

@@ -7,7 +7,7 @@
   position: fixed;
   inset: 0;
   z-index: 90;
-  background: rgba(26, 31, 29, 0.32);
+  background: rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(2px);
   animation: scrimIn var(--dur-2) linear both;
 }
@@ -27,9 +27,12 @@
   gap: var(--sp-3);
   width: min(400px, calc(100vw - 2 * var(--sp-5)));
   padding: var(--sp-6);
-  border-radius: var(--r-lg);
-  background: var(--paper-raised);
-  box-shadow: var(--e-pop);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-xl);
+  background: var(--glass-strong);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--e-pop), var(--glass-sheen);
   transform: translate(-50%, -50%);
   animation: dialogIn var(--dur-3) var(--ease-emph) both;
 }
