@@ -6,8 +6,8 @@ use echo_contracts::{
     AuthLoginRequest, AuthLogoutResponse, AuthRegisterRequest, AuthUserResponse,
     ChangedCountResponse, Decimal, DeskResponse, MutationResponse, NotificationReadRequest,
     NotificationsListResponse, PortfolioListResponse, PortfolioUpsertRequest, PreferencesResponse,
-    PreferencesUpdateRequest, PublicUser, UnreadResponse, WatchListResponse,
-    WatchMutationRequest, WatchRuleCreateRequest,
+    PreferencesUpdateRequest, PublicUser, UnreadResponse, WatchListResponse, WatchMutationRequest,
+    WatchRuleCreateRequest,
 };
 use leptos::*;
 

@@ -928,7 +928,11 @@ fn CompareLeg(leg: CompareLegView) -> impl IntoView {
 
 #[component]
 fn RetryableMessage(message: String, cancelled: bool, on_retry: Callback<()>) -> impl IntoView {
-    let label = if cancelled { "已取消" } else { "请求未成功" };
+    let label = if cancelled {
+        "已取消"
+    } else {
+        "请求未成功"
+    };
     view! {
         <div class="answer-card">
             <p class="echo-error">{label} {(!cancelled).then(|| view! { "：" {message.clone()} })}</p>
@@ -1162,7 +1166,12 @@ pub fn ResearchPage(
     });
 
     // 任一轮仍在流式研究中都视为 pending——禁止再次提交，避免并发请求的结果错位。
-    let pending = move || thread.get().iter().any(|turn| turn.status.get().is_streaming());
+    let pending = move || {
+        thread
+            .get()
+            .iter()
+            .any(|turn| turn.status.get().is_streaming())
+    };
     let on_persisted = Callback::new(move |_| sessions.refetch());
     let on_activity = Callback::new(move |_| activity.update(|value| *value += 1));
 
