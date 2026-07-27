@@ -1342,6 +1342,9 @@ impl ResearchPorts for ApiResearchPorts {
             min: summary.min,
             max: summary.max,
             median: summary.median,
+            p25: summary.p25,
+            p75: summary.p75,
+            latest: summary.latest,
         })
     }
 

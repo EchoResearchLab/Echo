@@ -39,6 +39,13 @@ impl PeerAnchor {
     fn all_positive(&self) -> bool {
         self.p25 > Decimal::ZERO && self.median > Decimal::ZERO && self.p75 > Decimal::ZERO
     }
+
+    /// 分位是否真的展开成了一条带。可比集太小时 p25/中位/p75 会塌到同一个点（实测 AAPL 的
+    /// 4 家可比给出 p75 == 中位 == 22.65x），此时它给的是一个点估计而非区间，当作带子用会
+    /// 制造"同业口径很确定"的假象。要求 p25 < p75 才承认这条锚点可用。
+    fn is_spread(&self) -> bool {
+        self.p25 < self.p75
+    }
 }
 
 /// 唯一财务事实源（research.ts 的 `toDomainSources` 产出，估值/护栏/提示词共用同一份）。
@@ -138,6 +145,12 @@ pub struct HistoricalValuation {
     pub min: Option<Decimal>,
     pub max: Option<Decimal>,
     pub median: Option<Decimal>,
+    /// 四分位——PE 法的熊/牛锚点；见 `HistoricalValuationSummary` 里不取 min/max 的理由。
+    pub p25: Option<Decimal>,
+    pub p75: Option<Decimal>,
+    /// 序列最新一点，与其余分位同口径。估值只用「分位 ÷ latest」的比值——绝不拿本序列的
+    /// 绝对倍数乘 TTM EPS（口径不同，GOOGL 实测差 86%）。
+    pub latest: Option<Decimal>,
 }
 
 impl Financials {
@@ -460,8 +473,7 @@ pub fn compute_valuation(
         Some(p) => p,
         None => return Valuation::cannot("无法估值", "缺行情价格，无法估值。", Vec::new()),
     };
-    let pe = market.pe.or(company.pe);
-    let market_cap = market.market_cap;
+    // 当前 trailing PE 刻意不参与估值：它只是价格的另一种写法（见下方历史 PE 分位法）。
     let has_financials = f.ok();
 
     // ── Stage-aware：亏损股走 EV/Sales，避免掉进"以现价为中心的 PE 带"自循环。
@@ -476,29 +488,47 @@ pub fn compute_valuation(
     let mut assumptions: Vec<String> = Vec::new();
     let mut sensitivity: Vec<String> = Vec::new();
 
-    // ── PE 法：pe>0 && eps>0 && 已年化。
-    if let (Some(pe), Some(eps)) = (pe.filter(|p| *p > Decimal::ZERO), f.eps_usable_for_pe()) {
-        let (pe_bear, pe_base, pe_bull) = (pe * dec!(0.7), pe, pe * dec!(1.3));
+    // ── 历史 PE 法：自身历史 PE 分位 × 当期 EPS，即"估值回到自己五年来的常态"。
+    //
+    // 刻意**不用当前 trailing PE 当 base**：`EPS × (价格/EPS)` 一约就是现价，那条带的 base
+    // 恒等于现价、bear/bull 只是现价 ×0.7/×1.3，零信息量，还会把整条均值往现价拽——正是本
+    // 文件反复声明要根除的"以现价为中心的 PE 带"，此前只是换了个名字藏在 methods 里。
+    // 缺历史序列（港股 filing EPS 深度不足）就不给这条方法，绝不退回当前 PE。
+    // 用**比值**而非绝对倍数：目标价 = 现价 × (历史分位 ÷ 序列最新点)。分子分母同口径
+    // （都基于当时已知的年报 EPS），口径差异整除掉，因此这条法不需要、也不该碰 TTM EPS。
+    // 直接拿年报口径的中位 PE 去乘 TTM EPS 是跨口径混数：GOOGL 年报口径 29.58x、TTM 口径
+    // 15.88x，差 86%，那样算出的 566 元对 320 元的现价毫无意义。
+    if let Some((bear_mult, base_mult, bull_mult)) =
+        f.historical_valuation.as_ref().and_then(|hv| {
+            let latest = hv.latest.filter(|v| *v > Decimal::ZERO)?;
+            let base = hv.median?;
+            // 缺四分位时退回中位数本身（带子收窄成一点，仍好过引入 min/max 的极端值）。
+            let bear = hv.p25.unwrap_or(base);
+            let bull = hv.p75.unwrap_or(base);
+            (bear > Decimal::ZERO && bear <= base && base <= bull)
+                .then(|| (bear / latest, base / latest, bull / latest))
+        })
+    {
         methods.push(WeightedMethod {
-            name: "PE".into(),
-            bear: eps * pe_bear,
-            base: eps * pe_base,
-            bull: eps * pe_bull,
+            name: "历史 PE 分位".into(),
+            bear: price * bear_mult,
+            base: price * base_mult,
+            bull: price * bull_mult,
         });
         assumptions.push(format!(
-            "Trailing PE {}x（bear {}x / base {}x / bull {}x）",
-            pe.normalize(),
-            round2(pe_bear).normalize(),
-            round2(pe_base).normalize(),
-            round2(pe_bull).normalize()
+            "历史 PE 分位：估值回到近五年 p25 / 中位 / p75 分别对应现价的 {}x / {}x / {}x",
+            round2(bear_mult).normalize(),
+            round2(base_mult).normalize(),
+            round2(bull_mult).normalize()
         ));
-        assumptions.push(format!("EPS {}", eps.normalize()));
-        sensitivity.push(format!("PE 每变化 1x，目标价变化约 {}", eps.normalize()));
+        sensitivity.push("估值倍数每回归 10%，目标价同比例变动".into());
     }
 
     // ── 同业倍数 PE 法：用同业 PE 分位数 × 自身 EPS。
     if let (Some(a), Some(eps)) = (
-        peer.filter(|a| a.multiple_type == MultipleType::Pe && a.n >= 2 && a.all_positive()),
+        peer.filter(|a| {
+            a.multiple_type == MultipleType::Pe && a.n >= 2 && a.all_positive() && a.is_spread()
+        }),
         f.eps_usable_for_pe(),
     ) {
         methods.push(WeightedMethod {
@@ -532,60 +562,20 @@ pub fn compute_valuation(
         assumptions.push(format!("Forward PE {}x", fwd_pe.normalize()));
     }
 
-    // ── FCF Yield 法（bear 10% / base 7% / bull 5%）。
-    if let (Some(fcf), Some(shares)) = (
-        f.free_cash_flow,
-        f.shares_outstanding.filter(|s| *s > Decimal::ZERO),
-    ) {
-        let fcf_ps = fcf / shares;
-        methods.push(WeightedMethod {
-            name: "FCF Yield".into(),
-            bear: fcf_ps / dec!(0.10),
-            base: fcf_ps / dec!(0.07),
-            bull: fcf_ps / dec!(0.05),
-        });
-        assumptions.push(format!(
-            "FCF per share {}（收益率 5–10%）",
-            round2(fcf_ps).normalize()
-        ));
-    }
-
-    // ── DCF 简化（5 年 + 永续），净现金口径同 EV/Sales。
-    if let (Some(fcf0), Some(growth_pct)) = (f.free_cash_flow, f.revenue_growth) {
-        let growth = growth_pct / Decimal::ONE_HUNDRED;
-        let wacc = dec!(0.10);
-        let terminal_growth = dec!(0.03);
-        let mut pv = Decimal::ZERO;
-        let mut fcf = fcf0;
-        let mut discount = Decimal::ONE;
-        for _ in 1..=5 {
-            fcf *= Decimal::ONE + growth;
-            discount *= Decimal::ONE + wacc;
-            pv += fcf / discount;
-        }
-        let terminal = fcf * (Decimal::ONE + terminal_growth) / (wacc - terminal_growth) / discount;
-        let enterprise_value = pv + terminal;
-        let net_cash = f.net_cash.unwrap_or_else(|| {
-            f.cash_and_equivalents.unwrap_or(Decimal::ZERO) - f.total_debt.unwrap_or(Decimal::ZERO)
-        });
-        let equity_value = enterprise_value + net_cash;
-        let shares_out = f
-            .shares_outstanding
-            .or_else(|| market_cap.map(|mc| mc / price));
-        if let Some(shares_out) = shares_out.filter(|s| *s > Decimal::ZERO) {
-            let dcf = equity_value / shares_out;
-            methods.push(WeightedMethod {
-                name: "DCF".into(),
-                bear: dcf * dec!(0.8),
-                base: if dcf.is_zero() { price } else { dcf },
-                bull: dcf * dec!(1.2),
-            });
-            assumptions.push(format!(
-                "DCF：WACC 10%，永续增长 3%，净现金 {}",
-                round2(net_cash).normalize()
-            ));
-        }
-    }
+    // ── 简化 DCF 与 FCF Yield 已移除（详见下方说明），估值只保留数据驱动的相对法。
+    //
+    // 简化 DCF 的终值项是 `FCF × (1+g) / (wacc − g)`，终值又占五年模型九成以上的现值，
+    // 于是整条带实质上被 `1/(wacc − g)` 这一个数决定：WACC 10% / 永续 3% 锁死在 14.3x FCF，
+    // 而市场给大盘科技股 25–35x。实测四只标的（AAPL/MSFT/GOOGL/NVDA）DCF 一律比另外两法
+    // 低 45–72%，且这个偏差**与被估值的公司无关**——换成 WACC 8% / 永续 4% 就变成 25x，
+    // 结论随之翻转。没有公司特定的资本成本（beta、无风险利率、风险溢价、资本结构）之前，
+    // 它给出的不是估值，是"如果这家公司值 14 倍自由现金流"这个假设的换算结果。
+    //
+    // FCF Yield 的 base 收益率 7% 恰好等于 wacc − g，是同一个假设的粗糙版本，一并移除。
+    //
+    // 留下的两条法都只用观测数据、不含任意参数：一条对自己的历史（历史 PE 分位），一条对
+    // 同业（同业倍数 PE）。要恢复绝对估值，先接入资本成本模型，届时它才是一条独立证据，
+    // 而不是把两个常数写进结论里。`free_cash_flow` / `total_debt` 等字段仍保留供护栏登记。
 
     if methods.is_empty() {
         // 关键不变量：绝不回退到"以现价为中心的 PE 带"。缺口径就诚实不给带子。
@@ -705,7 +695,24 @@ mod tests {
             revenue: Some(dec!(650_000_000_000)),
             revenue_growth: Some(dec!(11.0)),
             shares_outstanding: Some(dec!(9_200_000_000)),
+            // 历史 PE 分位是 PE 法的唯一锚点（当前 trailing PE 已被移除——它等价于现价）。
+            // latest 20 落在 p25 14 与 p75 22 之间，比值 0.7 / 0.9 / 1.1。
+            historical_valuation: Some(historical_pe(dec!(20))),
             ..Default::default()
+        }
+    }
+
+    /// 近五年 p25 14x / 中位 18x / p75 22x，`latest` 由调用方指定——它相对分位的位置
+    /// 决定带子落在现价的哪一侧。
+    fn historical_pe(latest: Decimal) -> HistoricalValuation {
+        HistoricalValuation {
+            percentile: Some(dec!(62)),
+            min: Some(dec!(9)),
+            max: Some(dec!(40)),
+            median: Some(dec!(18)),
+            p25: Some(dec!(14)),
+            p75: Some(dec!(22)),
+            latest: Some(latest),
         }
     }
 
@@ -715,10 +722,11 @@ mod tests {
             sector: Some("互联网".into()),
             ..Default::default()
         };
-        // 现价 120 落在 PE 隐含带内（bear 75.6 / base 108 / bull 140.4）——最常见的形态。
+        // 历史分位带 = eps 6 ×(p25 14 / 中位 18 / p75 22) = 84 / 108 / 132，现价 120 落在带内。
         let market = MarketSnapshot {
             price: Some(dec!(120)),
-            pe: Some(dec!(18)),
+            // 当前 trailing PE 给得再离谱也不该影响估值——它已不参与计算。
+            pe: Some(dec!(99)),
             market_cap: Some(dec!(1_100_000_000_000)),
             ..Default::default()
         };
@@ -727,8 +735,34 @@ mod tests {
             v.is_valued(),
             "profitable PE band should produce a valuation: {v:?}"
         );
-        // base = eps 6 × pe 18 = 108
         assert_eq!(v.base.unwrap(), dec!(108.00));
+        assert_eq!(v.bear.unwrap(), dec!(84.00));
+        assert_eq!(v.bull.unwrap(), dec!(132.00));
+    }
+
+    /// 当前 trailing PE 恒等于「价格 ÷ EPS」，用它当 base 算出来的就是现价本身——零信息量的
+    /// 自循环。缺历史序列时必须诚实不给这条方法，绝不退回当前 PE。
+    #[test]
+    fn current_trailing_pe_is_never_used_as_an_anchor() {
+        let company = Company::default();
+        let market = MarketSnapshot {
+            price: Some(dec!(120)),
+            pe: Some(dec!(18)),
+            market_cap: Some(dec!(1_100_000_000_000)),
+            ..Default::default()
+        };
+        let f = Financials {
+            historical_valuation: None,
+            free_cash_flow: None,
+            ..profitable_financials()
+        };
+        let v = compute_valuation(&company, &market, &f, None);
+        assert!(
+            !v.methods.iter().any(|m| m == "PE"),
+            "不得出现基于当前 PE 的方法: {:?}",
+            v.methods
+        );
+        assert!(!v.is_valued(), "无历史序列时应诚实缺口径: {v:?}");
     }
 
     /// 整条带落在现价下方 = "这股票贵"，是有效研究结论，不是数据错误。旧口径要求
@@ -739,36 +773,77 @@ mod tests {
             sector: Some("互联网".into()),
             ..Default::default()
         };
-        // PE 隐含带 bear 75.6 / base 108 / bull 140.4，现价 200 高于整条带。
         let market = MarketSnapshot {
             price: Some(dec!(200)),
             pe: Some(dec!(18)),
             market_cap: Some(dec!(1_100_000_000_000)),
             ..Default::default()
         };
-        let v = display_valuation(&company, &market, &profitable_financials(), None);
+        // latest 30x 高于 p75 22x（AAPL 实测就是这个形态：43.9x vs p75 36.8x），
+        // 比值 0.467 / 0.6 / 0.733 → 整条带 93.33 / 120 / 146.67 落在现价 200 下方。
+        let f = Financials {
+            historical_valuation: Some(historical_pe(dec!(30))),
+            ..profitable_financials()
+        };
+        let v = display_valuation(&company, &market, &f, None);
         assert!(v.is_valued(), "整条带在现价下方应给出结论: {v:?}");
-        assert_eq!(v.base.unwrap(), dec!(108.00));
+        assert_eq!(v.base.unwrap(), dec!(120.00));
+        assert!(v.bull.unwrap() < dec!(200), "整条带应在现价下方: {v:?}");
         // 下行空间为负——这正是"贵"的量化表达。
         assert!(v.upside.as_deref().is_some_and(|u| u.starts_with('-')));
     }
 
-    /// 但脱节仍要拦：带子比现价低一个数量级，属于口径错配（错股本/错币种/错报告期），
-    /// 不是"贵得离谱"。阈值与 EV/Sales 路径同源。
+    /// 比值法的关键性质：历史序列与 TTM EPS 是两套口径，绝不能相乘。这里 TTM EPS 给一个
+    /// 与年报口径差很远的值，带子必须只由「现价 × 分位比值」决定，不受其影响。
     #[test]
-    fn band_an_order_of_magnitude_off_is_still_refused() {
-        let company = Company {
-            sector: Some("互联网".into()),
-            ..Default::default()
-        };
-        // bull 140.4 远低于现价一半（1500/2 = 750）→ 判脱节。
+    fn historical_band_is_a_ratio_and_ignores_ttm_eps() {
+        let company = Company::default();
         let market = MarketSnapshot {
-            price: Some(dec!(1500)),
-            pe: Some(dec!(18)),
+            price: Some(dec!(120)),
             market_cap: Some(dec!(1_100_000_000_000)),
             ..Default::default()
         };
-        let v = display_valuation(&company, &market, &profitable_financials(), None);
+        let with_ttm_eps = Financials {
+            eps: Some(dec!(6.0)),
+            ..profitable_financials()
+        };
+        let with_other_eps = Financials {
+            eps: Some(dec!(13.0)),
+            ..profitable_financials()
+        };
+        let a = compute_valuation(&company, &market, &with_ttm_eps, None);
+        let b = compute_valuation(&company, &market, &with_other_eps, None);
+        assert_eq!(a.base, b.base, "历史分位法不得依赖 EPS 口径");
+        assert_eq!(a.base.unwrap(), dec!(108.00), "120 × (18 ÷ 20)");
+    }
+
+    /// 但脱节仍要拦：带子比现价低一个数量级，属于口径错配（错股本/错币种/错报告期），
+    /// 不是"贵得离谱"。阈值与 EV/Sales 路径同源。
+    ///
+    /// 脱节只可能来自绝对口径的方法——历史分位法是「现价 × 比值」，结构上不会脱节。
+    /// 这里用一份脏同业锚点（可比集 PE 只有 1.2x）构造。
+    #[test]
+    fn band_an_order_of_magnitude_off_is_still_refused() {
+        let company = Company::default();
+        let market = MarketSnapshot {
+            price: Some(dec!(1500)),
+            market_cap: Some(dec!(1_100_000_000_000)),
+            ..Default::default()
+        };
+        let f = Financials {
+            historical_valuation: None,
+            ..profitable_financials()
+        };
+        let dirty_peer = PeerAnchor {
+            multiple_type: MultipleType::Pe,
+            p25: dec!(1.0),
+            median: dec!(1.2),
+            p75: dec!(1.5),
+            n: 4,
+            tickers: vec!["A".into(), "B".into(), "C".into(), "D".into()],
+        };
+        // 带 6 / 7.2 / 9，bull 远低于现价一半（750）→ 判脱节。
+        let v = display_valuation(&company, &market, &f, Some(&dirty_peer));
         assert!(!v.is_valued());
         assert!(v.cannot_value_reason.is_some());
     }
