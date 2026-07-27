@@ -20,3 +20,8 @@ target/
 backups/
 *.dump
 **/.terraform/
+
+# 本地打包/快照产物（历史重置时留下过一个仓库自身的 tar，别再让它有机会入库）
+*.tar.gz
+*.tgz
+*.zip

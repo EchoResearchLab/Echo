@@ -1,0 +1,184 @@
+/* ============================================================================
+   Echo Research · 基础层
+   重置、文档排版默认值、焦点可达性、减少动态效果。
+   ========================================================================= */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100dvh;
+  color: var(--ink-1);
+  font-family: var(--font-sans);
+  font-size: var(--fs-15);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tracking-tight);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* 底层不是纯色：两片极弱的品牌光晕给毛玻璃一点可折射的东西，否则模糊一片纯色
+     与不透明白毫无区别。强度压到几乎看不见——它的作用是让材质成立，不是当装饰。 */
+  background:
+    radial-gradient(1100px 760px at 88% -8%, rgba(0, 113, 227, 0.05), transparent 68%),
+    radial-gradient(900px 620px at 4% 104%, rgba(0, 113, 227, 0.032), transparent 70%),
+    var(--paper-canvas);
+  background-attachment: fixed;
+}
+
+/* 金融数字统一等宽，表格与估值区不会因数字宽度跳动。 */
+.tnum,
+.val-v,
+.completeness-label,
+.watch-ticker,
+.earnings-v,
+.ac-chip,
+time,
+kbd,
+td,
+th {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+}
+
+p {
+  line-height: var(--lh-body);
+}
+
+a {
+  color: var(--brand-ink);
+  text-decoration-color: var(--brand-200);
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  text-decoration-color: currentColor;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+svg {
+  display: block;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+::placeholder {
+  color: var(--ink-4);
+  opacity: 1;
+}
+
+::selection {
+  color: var(--brand-900);
+  background: var(--brand-100);
+}
+
+/* ── 焦点：只在键盘导航时出现，鼠标点击不留环 ─────────────────────── */
+:focus {
+  outline: none;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+
+/* ── 滚动条：细、低对比，不抢注意力 ───────────────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-clip: content-box;
+  border: 3px solid transparent;
+  border-radius: var(--r-full);
+  background-color: var(--line-2);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--line-3);
+}
+
+/* ── 首帧引导屏：WASM 挂载前唯一可见的东西 ───────────────────────── */
+.boot-screen {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  color: var(--brand-ink);
+  font-family: var(--font-serif);
+  font-size: var(--fs-25);
+  letter-spacing: 0.24em;
+  opacity: 0;
+  animation: bootFade var(--dur-4) var(--ease-out) 160ms forwards;
+}
+
+@keyframes bootFade {
+  to {
+    opacity: 1;
+  }
+}
+
+/* ── 尊重系统「减少动态效果」──────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
