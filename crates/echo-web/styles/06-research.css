@@ -240,9 +240,12 @@
 }
 
 /* ── 研究台主列 ─────────────────────────────────────────────────────── */
+/* 两行：可滚动的对话流 + 贴底的编辑器。
+   行数必须和子元素数量对齐——顶部状态条撤掉后这里曾经多留了一行 `auto`，
+   于是对话流落进 auto 行被内容撑开、编辑器反倒拿到 1fr 被拉伸，滚动整个失效。 */
 .desk {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
 }
@@ -1206,14 +1209,12 @@
   padding: 0 var(--gutter) var(--sp-5);
 }
 
+/* 编辑器外层不铺底色：底下就是 body 那层带品牌光晕的背景，玻璃要能看见它才成立。
+   原来这里压了一层不透明渐变，玻璃模糊的是一块纯色——等于白花一个合成层。
+   对话流的下边缘由 `.conversation` 自己的 mask-image 收，不需要这层渐变兜底。 */
 .desk.has-thread .composer {
   padding-top: var(--sp-3);
-  /* 内容滚到编辑器下方时给一段渐隐，不做硬切。 */
-  background: linear-gradient(
-    180deg,
-    rgba(245, 245, 247, 0) 0%,
-    var(--paper-canvas) 22%
-  );
+  background: transparent;
 }
 
 /* 编辑器是唯一常驻的输入工作区，用玻璃把它和滚动的内容分层。
@@ -1310,11 +1311,7 @@
 .desk:not(.has-thread) .composer {
   max-width: var(--content-max);
   padding: var(--sp-3) var(--gutter) var(--sp-6);
-  background: linear-gradient(
-    180deg,
-    rgba(245, 245, 247, 0) 0%,
-    var(--paper-canvas) 24%
-  );
+  background: transparent;
 }
 
 .desk:not(.has-thread) .composer-panel {
