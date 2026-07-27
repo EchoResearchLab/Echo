@@ -634,8 +634,14 @@ pub fn compute_valuation(
 /// 展示安全估值（`displayValuation` 迁入）。分析师目标价源尚未接通（估值 estimates 恒为 None），
 /// 因此两条兜底路径都不会产出 analyst band——与当前 research.ts 的接线一致。
 ///
-/// 关键不变量：传统带若与现价不自洽（`bear < price < bull` 不成立），**不回退到以现价为中心的
-/// PE 带**（自循环根因），而是诚实标注缺口径。
+/// 关键不变量：缺口径时**不回退到以现价为中心的 PE 带**（自循环根因），而是诚实标注缺口径。
+/// 这条防线在 [`compute_valuation`]（`methods.is_empty()` → `cannot`），不在本函数。
+///
+/// 本函数只判"带子与现价是否脱节"，判据见 [`band_coherent`]：**不要求带子跨越现价**。
+/// 整条带落在现价下方就是"这股票贵"、落在上方就是"便宜"，正是用户问"贵不贵"时最想要的结论；
+/// 旧口径要求 `bear < price < bull`，等于把所有强观点都当成数据错误丢掉（实测 MSFT、INTC
+/// 四法都算得出带子，全被这一条吞掉）。自循环的特征是带子**以现价为中心**，不是带子**包含现价**，
+/// 用后者当代理指标是错的。亏损股的 EV/Sales 路径早已豁免此检查，这里与之统一口径。
 #[must_use]
 pub fn display_valuation(
     company: &Company,
@@ -655,9 +661,9 @@ pub fn display_valuation(
     }
 
     let price = market.price.or(company.price);
-    let coherent = match (v.bear, v.bull, price) {
-        (Some(bear), Some(bull), Some(price)) if v.cannot_value_reason.is_none() => {
-            bear > Decimal::ZERO && bear < price && price < bull
+    let coherent = match (v.bear, v.base, v.bull, price) {
+        (Some(bear), Some(base), Some(bull), Some(price)) if v.cannot_value_reason.is_none() => {
+            band_coherent(bear, base, bull, price)
         }
         _ => false,
     };
@@ -673,6 +679,18 @@ pub fn display_valuation(
             .unwrap_or("缺少自洽的估值口径，本轮不给估值区间。"),
         Vec::new(),
     )
+}
+
+/// 带子是否可信：**内部有序** + **与现价同量级**。允许整条带落在现价任一侧。
+///
+/// 同量级阈值与 `compute_ev_sales` 的 `band_disconnected` 同源（`bull < 现价/2` 或
+/// `bear > 现价×2` 即判脱节），全产品对"带子与现价脱节"只保留一个定义。含义是：模型最多
+/// 说得出"该跌一半"或"该涨一倍"，再离谱就属于数据脏（错配股本、错配币种、错配报告期），
+/// 不是强观点——SpaceX 复盘里那条"该跌 94–98%"还挂着高置信度的脏带正是这样来的。
+fn band_coherent(bear: Decimal, base: Decimal, bull: Decimal, price: Decimal) -> bool {
+    let ordered = bear > Decimal::ZERO && bear <= base && base <= bull;
+    let same_magnitude = bull >= price / dec!(2) && bear <= price * dec!(2);
+    ordered && same_magnitude
 }
 
 #[cfg(test)]
@@ -697,8 +715,7 @@ mod tests {
             sector: Some("互联网".into()),
             ..Default::default()
         };
-        // 现价须落在 PE 隐含带内（bear 75.6 / base 108 / bull 140.4），否则原版同样判"带子与
-        // 现价不自洽"而拒绝——这条不变量是刻意保留的。
+        // 现价 120 落在 PE 隐含带内（bear 75.6 / base 108 / bull 140.4）——最常见的形态。
         let market = MarketSnapshot {
             price: Some(dec!(120)),
             pe: Some(dec!(18)),
@@ -712,6 +729,65 @@ mod tests {
         );
         // base = eps 6 × pe 18 = 108
         assert_eq!(v.base.unwrap(), dec!(108.00));
+    }
+
+    /// 整条带落在现价下方 = "这股票贵"，是有效研究结论，不是数据错误。旧口径要求
+    /// `bear < 现价 < bull`，把这类强观点全判成"不自洽"吞掉（MSFT/INTC 实测即如此）。
+    #[test]
+    fn band_entirely_below_price_still_counts_as_expensive() {
+        let company = Company {
+            sector: Some("互联网".into()),
+            ..Default::default()
+        };
+        // PE 隐含带 bear 75.6 / base 108 / bull 140.4，现价 200 高于整条带。
+        let market = MarketSnapshot {
+            price: Some(dec!(200)),
+            pe: Some(dec!(18)),
+            market_cap: Some(dec!(1_100_000_000_000)),
+            ..Default::default()
+        };
+        let v = display_valuation(&company, &market, &profitable_financials(), None);
+        assert!(v.is_valued(), "整条带在现价下方应给出结论: {v:?}");
+        assert_eq!(v.base.unwrap(), dec!(108.00));
+        // 下行空间为负——这正是"贵"的量化表达。
+        assert!(v.upside.as_deref().is_some_and(|u| u.starts_with('-')));
+    }
+
+    /// 但脱节仍要拦：带子比现价低一个数量级，属于口径错配（错股本/错币种/错报告期），
+    /// 不是"贵得离谱"。阈值与 EV/Sales 路径同源。
+    #[test]
+    fn band_an_order_of_magnitude_off_is_still_refused() {
+        let company = Company {
+            sector: Some("互联网".into()),
+            ..Default::default()
+        };
+        // bull 140.4 远低于现价一半（1500/2 = 750）→ 判脱节。
+        let market = MarketSnapshot {
+            price: Some(dec!(1500)),
+            pe: Some(dec!(18)),
+            market_cap: Some(dec!(1_100_000_000_000)),
+            ..Default::default()
+        };
+        let v = display_valuation(&company, &market, &profitable_financials(), None);
+        assert!(!v.is_valued());
+        assert!(v.cannot_value_reason.is_some());
+    }
+
+    #[test]
+    fn band_coherence_allows_either_side_but_not_disconnection() {
+        // 内部有序 + 同量级：通过（带子整体在现价上方 = 便宜）。
+        assert!(band_coherent(dec!(120), dec!(150), dec!(180), dec!(100)));
+        // 整体在现价下方 = 贵：同样通过。
+        assert!(band_coherent(dec!(60), dec!(75), dec!(90), dec!(100)));
+        // 边界：bull 恰为现价一半 / bear 恰为现价两倍，仍算同量级。
+        assert!(band_coherent(dec!(30), dec!(40), dec!(50), dec!(100)));
+        assert!(band_coherent(dec!(200), dec!(240), dec!(280), dec!(100)));
+        // 脱节：bull 不足现价一半 / bear 超过现价两倍。
+        assert!(!band_coherent(dec!(20), dec!(30), dec!(49), dec!(100)));
+        assert!(!band_coherent(dec!(201), dec!(240), dec!(280), dec!(100)));
+        // 内部失序或非正：拒绝。
+        assert!(!band_coherent(dec!(90), dec!(75), dec!(60), dec!(100)));
+        assert!(!band_coherent(dec!(0), dec!(75), dec!(90), dec!(100)));
     }
 
     #[test]

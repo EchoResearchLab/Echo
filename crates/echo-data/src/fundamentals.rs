@@ -111,8 +111,9 @@ impl FundamentalsService {
             return Err(FundamentalsError::UnsupportedMarket(ticker));
         }
 
+        // limit=5 才够拿到「去年同期」（索引 4）。免费档 limit 上限恰好是 5。
         let income_path = format!(
-            "income-statement?symbol={}&period=quarter&limit=2",
+            "income-statement?symbol={}&period=quarter&limit=5",
             encode(&ticker)
         );
         let cash_path = format!(
@@ -138,7 +139,12 @@ impl FundamentalsService {
         let ratios = ratios_ttm.ok();
 
         let current = first_object(&income);
-        let prior = nth_object(&income, 1);
+        // 同比基期 = 四个季度前，**不是上一季**。季度环比对有季节性的公司是纯噪声：
+        // 苹果 FY26Q2 比 FY26Q1（假日季）营收 -22.7%、利润 -29.7%，同比却是 +16.6% / +19.4%。
+        // 这两个增速既进 DCF 的复合增长，又进作答事实块——环比口径下模型会被告知"苹果营收
+        // 下滑 22.7%"，而数字护栏只核"答案与事实块一致"，对口径错误无感，照样判全过。
+        // 上市不足五个季度 → `None` → 增速缺数，不拿环比顶替。
+        let prior = nth_object(&income, 4);
         let Some(current) = current else {
             return Ok(FundamentalsResult::missing("FMP"));
         };
@@ -248,7 +254,8 @@ mod tests {
     use rust_decimal_macros::dec;
     use serde_json::json;
 
-    /// 字段名取自 2026-07-27 对 `stable` 免费档 AAPL 的实测响应，勿凭印象改。
+    /// 字段名与五个季度的数值取自 2026-07-27 对 `stable` 免费档 AAPL 的实测响应，勿凭印象改。
+    /// 序列刻意保留真实的季节性：Q1 是假日季（1438 亿），环比会给出 -22.7% 的假下滑。
     fn aapl_fixture() -> (Value, Value, Value, Value) {
         let income = json!([
             {
@@ -257,19 +264,19 @@ mod tests {
                 "reportedCurrency": "USD",
                 "fiscalYear": "2026",
                 "period": "Q2",
-                "revenue": 95_359_000_000i64,
-                "grossProfit": 44_867_000_000i64,
-                "operatingIncome": 29_552_000_000i64,
-                "netIncome": 24_780_000_000i64,
+                "revenue": 111_226_000_000i64,
+                "grossProfit": 51_000_000_000i64,
+                "operatingIncome": 34_000_000_000i64,
+                "netIncome": 29_600_000_000i64,
                 "eps": 2.02,
                 "epsDiluted": 2.01,
                 "weightedAverageShsOut": 14_710_718_000i64,
                 "weightedAverageShsOutDil": 14_768_115_000i64
             },
-            {
-                "revenue": 89_498_000_000i64,
-                "netIncome": 22_292_000_000i64
-            }
+            { "period": "Q1", "revenue": 143_800_000_000i64, "netIncome": 42_100_000_000i64 },
+            { "period": "Q4", "revenue": 102_500_000_000i64, "netIncome": 27_500_000_000i64 },
+            { "period": "Q3", "revenue":  94_000_000_000i64, "netIncome": 23_400_000_000i64 },
+            { "period": "Q2", "revenue":  95_359_000_000i64, "netIncome": 24_780_000_000i64 }
         ]);
         let cash = json!([{
             "netCashProvidedByOperatingActivities": 28_702_000_000i64,
@@ -293,7 +300,7 @@ mod tests {
         let (income, cash, balance, ratios) = aapl_fixture();
         map_row(
             first_object(&income).expect("current"),
-            nth_object(&income, 1),
+            nth_object(&income, 4),
             first_object(&cash),
             first_object(&balance),
             first_object(&ratios),
@@ -307,10 +314,42 @@ mod tests {
         assert_eq!(row.pe_ttm, Some(dec!(40.17129071170084)));
         assert_eq!(row.net_cash, Some(dec!(10000000000)));
         assert_eq!(row.period_label.as_deref(), Some("2026 Q2"));
-        let growth = pct_change(row.revenue, row.revenue_prior).expect("growth");
-        assert!(growth > dec!(6) && growth < dec!(7));
         let margin = pct_of(row.net_income, row.revenue).expect("margin");
         assert!(margin > dec!(25) && margin < dec!(27));
+    }
+
+    /// 增速必须是同比（对去年同期），不是环比。环比在苹果这种假日季公司上会把 +16.6% 的
+    /// 增长读成 -22.7% 的下滑，既污染作答事实块，又被 DCF 当成年增长率复合五年
+    /// （实测把每股 DCF 从约 146 美元压到 36 美元）。
+    #[test]
+    fn growth_is_year_over_year_not_sequential() {
+        let row = map_fixture();
+        let revenue_growth = pct_change(row.revenue, row.revenue_prior).expect("营收增速");
+        let profit_growth = pct_change(row.net_income, row.net_income_prior).expect("利润增速");
+        assert!(
+            revenue_growth > dec!(16) && revenue_growth < dec!(17),
+            "同比应约 +16.6%，实际 {revenue_growth}"
+        );
+        assert!(
+            profit_growth > dec!(19) && profit_growth < dec!(20),
+            "同比应约 +19.4%，实际 {profit_growth}"
+        );
+    }
+
+    /// 上市不足五个季度：增速诚实缺数，绝不退回环比顶替。
+    #[test]
+    fn young_listing_has_no_growth_rather_than_sequential() {
+        let (income, cash, balance, ratios) = aapl_fixture();
+        let short = json!([income.as_array().expect("array")[0].clone()]);
+        let row = map_row(
+            first_object(&short).expect("current"),
+            nth_object(&short, 4),
+            first_object(&cash),
+            first_object(&balance),
+            first_object(&ratios),
+        );
+        assert_eq!(row.revenue_prior, None);
+        assert_eq!(pct_change(row.revenue, row.revenue_prior), None);
     }
 
     /// 估值四法（PE / 同业 PE / FCF Yield / DCF）所依赖的口径必须全部到位——这些字段任一
