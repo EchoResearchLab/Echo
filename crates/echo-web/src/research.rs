@@ -614,6 +614,44 @@ pub(crate) fn SourceCards(sources: Vec<EvidenceView>) -> impl IntoView {
     .into_view()
 }
 
+/// 公司公告（SEC filings）——**一手证据**，与二手的网页证据卡分开呈现。
+///
+/// 此前后端取了公告、`connected_sources` 里也标着"最新公告"，前端却从不渲染：用户看得到
+/// "有这个数据源"，却看不到是哪几份、哪一天、去哪读原文。一手披露是这个产品里可信度最高
+/// 的一层证据，不该只当作一个统计数字。
+#[component]
+pub(crate) fn FilingCards(filings: Vec<echo_contracts::FilingView>) -> impl IntoView {
+    if filings.is_empty() {
+        return ().into_view();
+    }
+    view! {
+        <div class="filing-cards">
+            <p class="filing-cards-title">
+                "公司公告 · " {filings.len()} " 份（一手披露）"
+            </p>
+            <ul class="filing-list">
+                {filings.into_iter().map(|f| {
+                    let date = f.filed_date.clone().unwrap_or_else(|| "未核到日期".into());
+                    view! {
+                        <li>
+                            <a
+                                class="filing-item"
+                                href=f.source_url
+                                target="_blank"
+                                rel="noopener noreferrer"
+                            >
+                                <span class="filing-form">{f.form}</span>
+                                <span class="filing-date">{date}</span>
+                            </a>
+                        </li>
+                    }
+                }).collect_view()}
+            </ul>
+        </div>
+    }
+    .into_view()
+}
+
 /// 定性引用护栏徽标——与数字护栏并列，核的是"定性论断有没有标注真实来源号"。虚构来源号
 /// 标红。仅本轮有网页证据时出现。
 #[component]
@@ -942,6 +980,8 @@ fn DoneCard(res: AskResponse, on_regenerate: Callback<()>) -> impl IntoView {
             </div>
 
             <AnswerActions text=answer_text ticker=res.ticker.clone() on_regenerate=on_regenerate />
+
+            <FilingCards filings=res.filings.clone() />
 
             <SourceCards sources=res.sources.clone() />
 

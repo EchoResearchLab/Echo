@@ -5,10 +5,11 @@
 //! 季度 EPS 不得用于反推 PE——调用方应优先使用本结果的 `eps_ttm` / `pe_ttm`。
 //!
 //! **TTM 口径来自 `ratios-ttm`**（免费档已覆盖）：过去只从这个响应里取了 `pe_ttm` 一个字段，
-//! 而估值的五条方法全都要年化 EPS 或 FCF，于是 `compute_valuation` 在生产链路上 100% 落到
-//! `cannot_value`——811 行估值逻辑与四条不变量测试全绿，却从未产出过一次估值区间。
-//! 同一个响应里本来就有 `netIncomePerShareTTM`（年化 EPS）与 `freeCashFlowPerShareTTM`，
-//! 取回来即可让 PE / 同业倍数 PE / FCF Yield / DCF 四法点火，不增加任何一次外部请求。
+//! 而估值方法全都要年化 EPS，于是 `compute_valuation` 在生产链路上 100% 落到 `cannot_value`——
+//! 估值逻辑与全部不变量测试都绿，却从未产出过一次估值区间。同一个响应里本来就有
+//! `netIncomePerShareTTM`（年化 EPS），取回来即让同业倍数 PE 点火，不增加任何一次外部请求。
+//! `free_cash_flow_ttm` 现在不进估值（简化 DCF 与 FCF Yield 已移除），但仍进护栏登记表与
+//! 事实块——模型引用现金流数字时要有据可核。
 
 use crate::fmp::{self, FmpError, decimal_at, fetch_json, string_at};
 use crate::{Market, detect_market, normalize_ticker};
@@ -38,7 +39,6 @@ pub struct FundamentalsRow {
     /// 摊薄股本（`weightedAverageShsOutDil`，缺失退回基本股本）。
     pub shares_outstanding: Option<Decimal>,
     pub total_debt: Option<Decimal>,
-    pub enterprise_value: Option<Decimal>,
     pub revenue_prior: Option<Decimal>,
     pub net_income_prior: Option<Decimal>,
     pub period_end: Option<String>,
@@ -208,7 +208,6 @@ fn map_row(
         free_cash_flow_ttm,
         shares_outstanding,
         total_debt: balance_row.and_then(|row| decimal_at(row, "totalDebt")),
-        enterprise_value: ratios_row.and_then(|row| decimal_at(row, "enterpriseValueTTM")),
         revenue_prior: prior.and_then(|row| decimal_at(row, "revenue")),
         net_income_prior: prior.and_then(|row| decimal_at(row, "netIncome")),
         period_end: string_at(current, "date"),
@@ -290,8 +289,7 @@ mod tests {
         let ratios = json!([{
             "priceToEarningsRatioTTM": 40.17129071170084,
             "netIncomePerShareTTM": 8.332360120015895,
-            "freeCashFlowPerShareTTM": 8.780944614668027,
-            "enterpriseValueTTM": 4_939_566_295_120i64
+            "freeCashFlowPerShareTTM": 8.780944614668027
         }]);
         (income, cash, balance, ratios)
     }
@@ -371,7 +369,6 @@ mod tests {
             "FCF={fcf}"
         );
         assert_eq!(row.total_debt, Some(dec!(98000000000)));
-        assert_eq!(row.enterprise_value, Some(dec!(4939566295120)));
     }
 
     /// 免费档偶尔整份 `ratios-ttm` 取不到（限流/字段缺失）。此时估值该诚实失败，

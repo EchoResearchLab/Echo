@@ -1113,6 +1113,60 @@
 }
 
 /* ── 网页证据来源卡 ─────────────────────────────────────────────────── */
+/* 一手公告：排在二手网页证据之前，可信度更高的先给。表单类型用等宽体，
+   它是 10-Q / 8-K 这类固定标识，等宽下扫读一列时对齐。 */
+.filing-cards {
+  display: grid;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-4);
+}
+
+.filing-cards-title {
+  color: var(--ink-4);
+  font-size: var(--fs-12);
+}
+
+.filing-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.filing-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  background: var(--paper-raised);
+  text-decoration: none;
+  transition:
+    border-color var(--dur-1) linear,
+    background-color var(--dur-1) linear;
+}
+
+.filing-item:hover {
+  border-color: var(--line-2);
+  background: var(--paper-canvas);
+}
+
+.filing-form {
+  color: var(--ink-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+
+.filing-date {
+  color: var(--ink-4);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+}
+
 .source-cards {
   display: grid;
   gap: var(--sp-2);

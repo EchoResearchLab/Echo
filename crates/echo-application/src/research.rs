@@ -755,6 +755,8 @@ pub(crate) fn guard_view(
             .earnings_calendar
             .as_ref()
             .and_then(|c| c.next_date.as_deref()),
+        // 公告随事实块一起喂给了模型，日期就必须可核。
+        filings: &facts.filings,
         ..Default::default()
     });
     let report = verify_answer_numbers(draft, &registry);

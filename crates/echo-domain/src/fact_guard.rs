@@ -12,7 +12,7 @@
 //! 与 JS 的实质差异：**零二进制浮点**。选"量级上最接近的事实"原文用 `log10` 距离，这里改用
 //! Decimal 比值 `max(v/f, f/v)` 取最小——同序、且不引入任何浮点（红线 4）。
 
-use crate::valuation::{Financials, MarketSnapshot, Valuation};
+use crate::valuation::{Filing, Financials, MarketSnapshot, Valuation};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::{BTreeMap, BTreeSet};
@@ -219,6 +219,10 @@ pub struct RegistrySources<'a> {
     pub financials: Option<&'a Financials>,
     pub valuation: Option<&'a Valuation>,
     pub earnings_next_date: Option<&'a str>,
+    /// 本轮喂给模型的公司公告。事实块明写"可引用表单类型与日期"，登记表就必须收下这些
+    /// 日期——否则模型照着引用反被判"日期查无"的硬失败（实测 AAPL 引用 10-Q 2026-05-01
+    /// 即如此）。这是本文件反复出现的同一条教训：喂出去的每个数字都要能核。
+    pub filings: &'a [Filing],
     pub position: Option<&'a Position>,
 }
 
@@ -282,7 +286,6 @@ pub fn build_facts_registry(sources: &RegistrySources) -> FactsRegistry {
         reg.push_percent(f.return_on_equity, "ROE", "financialsData");
         reg.push_percent(f.return_on_assets, "ROA", "financialsData");
         reg.push_multiple(f.pe, "PE", "financialsData");
-        reg.push_multiple(f.forward_pe, "Forward PE", "financialsData");
         reg.push_multiple(f.pb, "PB", "financialsData");
         reg.push_date(f.period.as_deref(), "财报期", "financialsData.period");
 
@@ -402,6 +405,13 @@ pub fn build_facts_registry(sources: &RegistrySources) -> FactsRegistry {
     }
 
     // 财报日历。
+    for filing in sources.filings {
+        reg.push_date(
+            filing.filed_date.as_deref(),
+            &format!("{} 公告日", filing.form),
+            "filings",
+        );
+    }
     if let Some(next) = sources.earnings_next_date {
         reg.push_date(Some(next), "下一业绩日", "earnings");
     }
@@ -1275,6 +1285,33 @@ mod tests {
         let report = verify_answer_numbers("基准估值区间 234.51 对应现价空间为 -27.8%。", &reg);
         assert_eq!(report.hard_count, 0, "如实引用估值空间不得判硬: {report:?}");
         assert_eq!(report.pass_count(), 2);
+    }
+
+    /// 事实块明写"可引用表单类型与日期"，登记表就必须收下公告日期——否则模型照做引用
+    /// 反被判"日期查无"的硬失败。这是本文件第四次出现同一条教训（历史分位、估值空间、
+    /// p25/p75、公告日期），每次都是"喂给模型了但没登记"。
+    #[test]
+    fn filing_dates_are_registered_so_quoting_them_is_not_a_hard_fail() {
+        let filings = vec![
+            Filing {
+                form: "10-Q".into(),
+                filed_date: Some("2026-05-01".into()),
+                source_url: "https://example.com/10q".into(),
+            },
+            Filing {
+                form: "8-K".into(),
+                filed_date: Some("2026-04-30".into()),
+                source_url: "https://example.com/8k".into(),
+            },
+        ];
+        let reg = build_facts_registry(&RegistrySources {
+            ticker: "AAPL",
+            filings: &filings,
+            ..Default::default()
+        });
+        let report =
+            verify_answer_numbers("最新季度财报（10-Q 2026-05-01）仍未核到具体数字。", &reg);
+        assert_eq!(report.hard_count, 0, "如实引用公告日期不得判硬: {report:?}");
     }
 
     #[test]

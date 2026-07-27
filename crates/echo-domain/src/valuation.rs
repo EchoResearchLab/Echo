@@ -55,7 +55,6 @@ pub struct Financials {
     pub eps: Option<Decimal>,
     /// `Some(false)` 表示报告期累计 EPS（不得反推 PE）；`None` 视为已年化（对齐 JS 的 `!== false`）。
     pub eps_annualized: Option<bool>,
-    pub forward_pe: Option<Decimal>,
     pub net_margin: Option<Decimal>,
     pub operating_margin: Option<Decimal>,
     pub revenue: Option<Decimal>,
@@ -486,7 +485,9 @@ pub fn compute_valuation(
 
     let mut methods: Vec<WeightedMethod> = Vec::new();
     let mut assumptions: Vec<String> = Vec::new();
-    let mut sensitivity: Vec<String> = Vec::new();
+    // 相对估值两法没有独立的敏感度可报：目标价就是现价乘一个倍数，"倍数变 10%、目标价
+    // 变 10%" 是这个算法的定义而不是信息。敏感度只在 EV/Sales 情景路径里有实质内容。
+    let sensitivity: Vec<String> = Vec::new();
 
     // ── 历史 PE 法：自身历史 PE 分位 × 当期 EPS，即"估值回到自己五年来的常态"。
     //
@@ -521,7 +522,6 @@ pub fn compute_valuation(
             round2(base_mult).normalize(),
             round2(bull_mult).normalize()
         ));
-        sensitivity.push("估值倍数每回归 10%，目标价同比例变动".into());
     }
 
     // ── 同业倍数 PE 法：用同业 PE 分位数 × 自身 EPS。
@@ -546,20 +546,6 @@ pub fn compute_valuation(
             a.p75.normalize(),
             eps.normalize()
         ));
-    }
-
-    // ── Forward PE 法。
-    if let (Some(fwd_pe), Some(eps)) = (
-        f.forward_pe.filter(|p| *p > Decimal::ZERO),
-        f.eps_usable_for_pe(),
-    ) {
-        methods.push(WeightedMethod {
-            name: "Forward PE".into(),
-            bear: eps * (fwd_pe * dec!(0.7)),
-            base: eps * fwd_pe,
-            bull: eps * (fwd_pe * dec!(1.3)),
-        });
-        assumptions.push(format!("Forward PE {}x", fwd_pe.normalize()));
     }
 
     // ── 简化 DCF 与 FCF Yield 已移除（详见下方说明），估值只保留数据驱动的相对法。
