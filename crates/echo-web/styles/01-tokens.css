@@ -173,3 +173,145 @@
   /* 滑块从轨道里"升起来"的那一层：升起感只需要一道极浅的投影 + 顶部高光。 */
   --glass-lift: 0 1px 2px rgba(0, 0, 0, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
+
+/* ============================================================================
+   深色模式
+   ----------------------------------------------------------------------------
+   只覆盖颜色类令牌，结构令牌（间距/圆角/字号/动效/布局）全部沿用——深浅两套皮
+   共享同一套骨架，任何一处组件样式都不该出现深色分支。
+
+   `prefers-color-scheme` 提供系统跟随，`:root[data-theme]` 提供显式选择且必须
+   赢过系统值：用户手动选了浅色，系统是深色时也得听用户的。
+
+   深色不是把浅色反相：
+   1. 纸面用近黑而非纯黑，纯黑上的阴影完全不可见，层级会塌成一片。
+   2. 墨色降到 #f5f5f7 而非纯白——纯白配近黑对比过高，长文阅读会"发光"刺眼。
+   3. 强调蓝提亮到 systemBlue 的深色变体（#0a84ff），#0071e3 在深底上偏暗、
+      与 --ink-3 的区分度不足。
+   4. 语义红/绿同样提亮：#d70015 在深底上几乎看不出是红色。
+   ========================================================================= */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --paper-raised: #1c1c1e;
+    --paper-canvas: #141416;
+    --paper-sunken: #232326;
+    --paper-inset: #2c2c2f;
+
+    --ink-1: #f5f5f7;
+    --ink-2: #d2d2d7;
+    --ink-3: #a1a1a8;
+    --ink-4: #86868b;
+
+    --line-1: rgba(255, 255, 255, 0.08);
+    --line-2: rgba(255, 255, 255, 0.14);
+    --line-3: rgba(255, 255, 255, 0.24);
+
+    --brand: #0a84ff;
+    --brand-hover: #3b9bff;
+    --brand-active: #0070e0;
+    --brand-ink: #6cb6ff;
+    --brand-tint: rgba(10, 132, 255, 0.16);
+    --brand-tint-strong: rgba(10, 132, 255, 0.26);
+    --brand-ring: rgba(10, 132, 255, 0.36);
+    /* 深阶在浅色下用作前景深蓝，深底上必须翻亮；浅阶用作背景，改成低透明度蓝。
+       漏覆盖任何一阶，拿它当前景色的组件就会在深底上消失——头像的 --brand-800
+       曾经就是这样变成一团看不见的深蓝。 */
+    --brand-900: #b9dbff;
+    --brand-800: #9ccbff;
+    --brand-700: #6cb6ff;
+    --brand-600: #0a84ff;
+    --brand-500: #0a84ff;
+    --brand-400: #4aa3ff;
+    --brand-200: rgba(10, 132, 255, 0.34);
+    --brand-100: rgba(10, 132, 255, 0.22);
+    --brand-050: rgba(10, 132, 255, 0.12);
+
+    --danger: #ff453a;
+    --danger-ink: #ff6961;
+    --danger-tint: rgba(255, 69, 58, 0.16);
+    --danger-line: rgba(255, 69, 58, 0.32);
+    --warn: #ff9f0a;
+    --warn-tint: rgba(255, 159, 10, 0.16);
+    --ok: #30d158;
+    --ok-tint: rgba(48, 209, 88, 0.16);
+
+    /* 深色下阴影几乎不可见，层级改由更亮的纸面承担；仍保留极弱投影托住浮层。 */
+    --e-1: 0 1px 2px rgba(0, 0, 0, 0.40);
+    --e-2: 0 1px 3px rgba(0, 0, 0, 0.40), 0 6px 16px -6px rgba(0, 0, 0, 0.50);
+    --e-3: 0 2px 6px rgba(0, 0, 0, 0.44), 0 18px 40px -14px rgba(0, 0, 0, 0.60);
+    --e-pop: 0 4px 10px rgba(0, 0, 0, 0.50), 0 26px 60px -18px rgba(0, 0, 0, 0.70);
+    --e-brand: 0 1px 2px rgba(0, 0, 0, 0.40), 0 8px 20px -8px rgba(10, 132, 255, 0.40);
+
+    --glass: rgba(28, 28, 30, 0.72);
+    --glass-strong: rgba(28, 28, 30, 0.88);
+    --glass-line: rgba(255, 255, 255, 0.10);
+    --glass-track: rgba(255, 255, 255, 0.08);
+    --glass-sheen: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    --glass-lift: 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  }
+}
+
+/* 显式选择优先于系统偏好——同一份声明重复一次，避免用 :where() 降权后
+   被组件层意外覆盖。 */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --paper-raised: #1c1c1e;
+  --paper-canvas: #141416;
+  --paper-sunken: #232326;
+  --paper-inset: #2c2c2f;
+
+  --ink-1: #f5f5f7;
+  --ink-2: #d2d2d7;
+  --ink-3: #a1a1a8;
+  --ink-4: #86868b;
+
+  --line-1: rgba(255, 255, 255, 0.08);
+  --line-2: rgba(255, 255, 255, 0.14);
+  --line-3: rgba(255, 255, 255, 0.24);
+
+  --brand: #0a84ff;
+  --brand-hover: #3b9bff;
+  --brand-active: #0070e0;
+  --brand-ink: #6cb6ff;
+  --brand-tint: rgba(10, 132, 255, 0.16);
+  --brand-tint-strong: rgba(10, 132, 255, 0.26);
+  --brand-ring: rgba(10, 132, 255, 0.36);
+  /* 深阶在浅色下用作前景深蓝，深底上必须翻亮；浅阶用作背景，改成低透明度蓝。
+     漏覆盖任何一阶，拿它当前景色的组件就会在深底上消失——头像的 --brand-800
+     曾经就是这样变成一团看不见的深蓝。 */
+  --brand-900: #b9dbff;
+  --brand-800: #9ccbff;
+  --brand-700: #6cb6ff;
+  --brand-600: #0a84ff;
+  --brand-500: #0a84ff;
+  --brand-400: #4aa3ff;
+  --brand-200: rgba(10, 132, 255, 0.34);
+  --brand-100: rgba(10, 132, 255, 0.22);
+  --brand-050: rgba(10, 132, 255, 0.12);
+
+  --danger: #ff453a;
+  --danger-ink: #ff6961;
+  --danger-tint: rgba(255, 69, 58, 0.16);
+  --danger-line: rgba(255, 69, 58, 0.32);
+  --warn: #ff9f0a;
+  --warn-tint: rgba(255, 159, 10, 0.16);
+  --ok: #30d158;
+  --ok-tint: rgba(48, 209, 88, 0.16);
+
+  --e-1: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --e-2: 0 1px 3px rgba(0, 0, 0, 0.40), 0 6px 16px -6px rgba(0, 0, 0, 0.50);
+  --e-3: 0 2px 6px rgba(0, 0, 0, 0.44), 0 18px 40px -14px rgba(0, 0, 0, 0.60);
+  --e-pop: 0 4px 10px rgba(0, 0, 0, 0.50), 0 26px 60px -18px rgba(0, 0, 0, 0.70);
+  --e-brand: 0 1px 2px rgba(0, 0, 0, 0.40), 0 8px 20px -8px rgba(10, 132, 255, 0.40);
+
+  --glass: rgba(28, 28, 30, 0.72);
+  --glass-strong: rgba(28, 28, 30, 0.88);
+  --glass-line: rgba(255, 255, 255, 0.10);
+  --glass-track: rgba(255, 255, 255, 0.08);
+  --glass-sheen: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --glass-lift: 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}

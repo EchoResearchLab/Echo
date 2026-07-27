@@ -10,11 +10,11 @@ use crate::answer_prompt::{
 use crate::model_gateway::{ModelStreamEvent, ModelStreamStart};
 use crate::{DecisionPanel, ResolvedCompany, build_panel};
 use echo_contracts::{
-    AnswerSource, AskRequest, AskResponse, AssetStageView, CitationGuardView, CompareLegView,
-    CompareResponse, EarningsCalendarView, EvidenceView, FilingView, GuardView, MethodBandView,
-    ResearchStreamCompare, ResearchStreamDelta, ResearchStreamError, ResearchStreamEvent,
-    ResearchStreamFinal, ResearchStreamGuard, ResearchStreamMeta, ResearchStreamStage,
-    ResearchStreamStageName, RouteView, ValuationView,
+    AnswerSource, AskRequest, AskResponse, AssetStageView, CitationGuardView, CompanyHeaderView,
+    CompareLegView, CompareResponse, EarningsCalendarView, EvidenceView, FilingView, GuardView,
+    MethodBandView, ResearchStreamCompare, ResearchStreamDelta, ResearchStreamError,
+    ResearchStreamEvent, ResearchStreamFinal, ResearchStreamGuard, ResearchStreamMeta,
+    ResearchStreamStage, ResearchStreamStageName, RouteView, ValuationView,
 };
 use echo_domain::{
     AssetStage, Company, EarningsCalendar, Evidence, Filing, Financials, HistoricalValuation,
@@ -331,6 +331,7 @@ impl ResearchService {
 
         let mut response = build_ask_response(
             &panel,
+            company_header(&panel.ticker, &facts.company, &facts.market),
             &route,
             answer,
             answer_source,
@@ -528,6 +529,7 @@ async fn drive_stream<P: ResearchPorts>(
 
     send(ResearchStreamEvent::Meta(Box::new(ResearchStreamMeta {
         ticker: panel.ticker.clone(),
+        company: company_header(&panel.ticker, &facts.company, &facts.market),
         route: route_view(&route),
         data_completeness: panel.data_completeness,
         connected_sources: panel
@@ -616,6 +618,7 @@ async fn drive_stream<P: ResearchPorts>(
 
     let mut response = build_ask_response(
         &panel,
+        company_header(&panel.ticker, &facts.company, &facts.market),
         &route,
         answer,
         answer_source,
@@ -798,8 +801,33 @@ pub(crate) fn citation_guard_view(evidence: &[Evidence], draft: &str) -> Option<
 }
 
 #[allow(clippy::too_many_arguments)]
+/// 行情抬头。**全缺就返回 `None`**——一个只有代码、没有任何数字的抬头是纯噪声，
+/// 不如不画；缺哪一项就少哪一项，绝不用 0 或上一次的值占位。
+fn company_header(
+    ticker: &str,
+    company: &ResolvedCompany,
+    market: &MarketSnapshot,
+) -> Option<CompanyHeaderView> {
+    let name = company.name_zh.clone();
+    let header = CompanyHeaderView {
+        ticker: ticker.to_string(),
+        name,
+        price: market.price,
+        change_percent: market.change_percent,
+        market_cap: market.market_cap,
+        currency: market.currency.clone(),
+    };
+    let empty = header.name.is_none()
+        && header.price.is_none()
+        && header.change_percent.is_none()
+        && header.market_cap.is_none();
+    (!empty).then_some(header)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_ask_response(
     panel: &DecisionPanel,
+    company: Option<CompanyHeaderView>,
     route: &ResearchRoute,
     answer: Option<String>,
     answer_source: AnswerSource,
@@ -811,6 +839,7 @@ fn build_ask_response(
 ) -> AskResponse {
     AskResponse {
         ticker: panel.ticker.clone(),
+        company,
         route: route_view(route),
         data_completeness: panel.data_completeness,
         connected_sources: panel

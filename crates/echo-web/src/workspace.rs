@@ -1330,6 +1330,12 @@ fn SettingsPage() -> impl IntoView {
             // 页头已经说清这页是干什么的；再放一条"通知由你掌控 / 保存后立即生效"的
             // 横幅只是把同一句话说第二遍。
             <div class="settings-grid">
+                <section class="settings-card">
+                    <div class="settings-card-head"><h2>"外观"</h2></div>
+                    <p class="muted">"跟随系统会随你的操作系统在日夜之间切换。"</p>
+                    {use_context::<RwSignal<crate::theme::Theme>>()
+                        .map(|theme| view! { <crate::theme::ThemePicker theme=theme /> })}
+                </section>
                 <section class="settings-card settings-delivery-card">
                     <div class="settings-card-head"><h2>"通知类型"</h2></div>
                     <Toggle icon="clock" label="盘前 / 盘后摘要" detail="每天汇总市场与自选公司变化" value=notify_digest set_value=set_notify_digest />

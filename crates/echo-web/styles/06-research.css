@@ -131,6 +131,24 @@
   padding-bottom: var(--sp-4);
 }
 
+/* 按天分组：日期提到组标题上，组内每行只留问题与代码。几十条平铺时时间戳挤在
+   每行副标题里根本扫不动。标题吸顶，滚动时始终知道正在看哪一天。 */
+.session-group + .session-group {
+  margin-top: var(--sp-4);
+}
+
+.session-group-title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--ink-4);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  background: var(--paper-canvas);
+}
+
 .session-item {
   position: relative;
   display: flex;
@@ -663,6 +681,143 @@
   50% {
     opacity: 0;
   }
+}
+
+/* ── 流式期间的已核源清单 ───────────────────────────────────────────── */
+/* 等答案的十几秒里给出"哪些事实已落地"，而不是只报一个数字。逐条淡入，
+   顺序即到达顺序；reduced-motion 下直接显示，不做入场。 */
+.evidence-live-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  margin: 0;
+  padding: 0 var(--sp-4) var(--sp-3);
+  list-style: none;
+}
+
+.evidence-live-sources li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--ink-3);
+  font-size: var(--fs-12);
+  animation: sourceIn var(--dur-3) var(--ease-out) both;
+}
+
+.els-check {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: var(--r-full);
+  background: var(--ok-tint);
+  position: relative;
+}
+
+/* 用描边勾而不是字符 ✓——字符会随系统字体漂移。 */
+.els-check::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 3px;
+  width: 4px;
+  height: 7px;
+  border-right: 1.5px solid var(--ok);
+  border-bottom: 1.5px solid var(--ok);
+  transform: rotate(45deg);
+}
+
+@keyframes sourceIn {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .evidence-live-sources li {
+    animation: none;
+  }
+}
+
+/* ── 行情抬头 ───────────────────────────────────────────────────────── */
+/* 放在答案之上：读一段估值判断时"现价多少"是理解它的前提，不该展开才看得到。
+   用一条底边与答案分隔，不做成卡片——避免嵌套表面。 */
+.company-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  padding-bottom: var(--sp-3);
+  margin-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--line-1);
+}
+
+.ch-identity {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.ch-name {
+  color: var(--ink-1);
+  font-size: var(--fs-16);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.ch-ticker {
+  color: var(--ink-4);
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+}
+
+.ch-quote {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.ch-price {
+  color: var(--ink-1);
+  font-size: var(--fs-16);
+  font-weight: 600;
+}
+
+.ch-price small {
+  margin-left: 2px;
+  color: var(--ink-4);
+  font-size: var(--fs-11);
+  font-weight: 500;
+}
+
+/* 涨跌用语义色，与品牌蓝彻底分开——蓝色只表示"能点"。 */
+.ch-change {
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+
+.ch-change.is-up {
+  color: var(--ok);
+}
+
+.ch-change.is-down {
+  color: var(--danger-ink);
+}
+
+.ch-change.is-flat {
+  color: var(--ink-3);
+}
+
+.ch-cap {
+  color: var(--ink-3);
+  font-size: var(--fs-12);
 }
 
 /* ── 估值区间 ───────────────────────────────────────────────────────── */

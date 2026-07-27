@@ -24,6 +24,9 @@ gloo-net = { version = "0.6", features = ["http"] }
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
+    # 外观偏好持久化（localStorage）与写 <html data-theme>。
+    "Storage",
+    "Element",
     "History",
     "Location",
     "Window",

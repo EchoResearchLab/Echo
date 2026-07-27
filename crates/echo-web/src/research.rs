@@ -16,8 +16,8 @@ use crate::dialog::confirm_destructive;
 use crate::format;
 use crate::icons::{EchoArt, Icon};
 use echo_contracts::{
-    AnswerSource, AskRequest, AskResponse, CitationGuardView, CompareLegView, CompareResponse,
-    Decimal, EarningsCalendarView, EvidenceView, GuardView, MutationResponse,
+    AnswerSource, AskRequest, AskResponse, CitationGuardView, CompanyHeaderView, CompareLegView,
+    CompareResponse, Decimal, EarningsCalendarView, EvidenceView, GuardView, MutationResponse,
     ResearchSessionDetail, ResearchSessionResponse, ResearchSessionsResponse, ResearchStreamEvent,
     ResearchStreamStage, ResearchStreamStageName, RouteView, ValuationView,
 };
@@ -33,6 +33,7 @@ enum TurnStatus {
     Streaming {
         stage: Option<ResearchStreamStage>,
         meta_route: Option<RouteView>,
+        meta_company: Option<CompanyHeaderView>,
         meta_valuation: Option<ValuationView>,
         meta_completeness: Option<u8>,
         meta_sources: Vec<String>,
@@ -55,6 +56,7 @@ impl TurnStatus {
         Self::Streaming {
             stage: None,
             meta_route: None,
+            meta_company: None,
             meta_valuation: None,
             meta_completeness: None,
             meta_sources: Vec::new(),
@@ -170,6 +172,34 @@ fn stage_label(stage: Option<&ResearchStreamStage>) -> String {
     }
 }
 
+/// 把会话按天分组，保持服务端给的倒序。返回 `(组标题, 该组会话)`，标题用"今天/昨天/日期"。
+///
+/// 这里只按 `updated_at` 的日期部分切分，不做任何排序或去重：服务端已按更新时间倒序，
+/// 前端再排一次只会在两边口径不一致时产生难查的错位。
+fn group_sessions_by_day(
+    sessions: Vec<echo_contracts::ResearchSessionSummary>,
+) -> Vec<(String, Vec<echo_contracts::ResearchSessionSummary>)> {
+    let mut groups: Vec<(String, Vec<_>)> = Vec::new();
+    for item in sessions {
+        let label = format::day_label(&item.updated_at);
+        match groups.last_mut() {
+            Some((last, bucket)) if *last == label => bucket.push(item),
+            _ => groups.push((label, vec![item])),
+        }
+    }
+    groups
+}
+
+/// 数据完备度的研究语言表述。设计系统禁止"完备度 xx%"这类产品状态词——读研究结论的人
+/// 要知道的是"这个判断有多少事实支撑"，不是一个进度条读数。
+fn completeness_phrase(completeness: u8) -> &'static str {
+    match completeness {
+        80..=u8::MAX => "主要事实已核到",
+        50..=79 => "部分事实未核到，置信度下降",
+        _ => "多数事实未核到，仅供定性参考",
+    }
+}
+
 pub(crate) fn decimal_text(value: Option<Decimal>) -> String {
     value
         .map(|decimal| decimal.normalize().to_string())
@@ -229,6 +259,7 @@ fn attach_stream(
             let TurnStatus::Streaming {
                 stage,
                 meta_route,
+                meta_company,
                 meta_valuation,
                 meta_completeness,
                 meta_sources,
@@ -246,6 +277,7 @@ fn attach_stream(
                         turn.ticker.set(m.ticker);
                     }
                     *meta_route = Some(m.route);
+                    *meta_company = m.company;
                     *meta_valuation = Some(m.valuation);
                     *meta_completeness = Some(m.data_completeness);
                     *meta_sources = m.connected_sources;
@@ -343,6 +375,50 @@ fn band_geometry(bear: Decimal, bull: Decimal, price: Decimal) -> Option<(String
     let width = pct(bull) - left;
     let render = |v: Decimal| v.round_dp(2).normalize().to_string();
     Some((render(left), render(width), render(pct(price))))
+}
+
+/// 行情抬头——答案上方"研究的是哪家、现在多少钱"。
+///
+/// 放在答案之上而非折叠面板里：读一段估值判断时，"现价多少"是理解它的前提，不该要展开
+/// 才看得到。每个字段各自可缺，缺的就不画——一行只剩代码时整个抬头不渲染（见后端
+/// `company_header`），绝不用 0 占位。
+#[component]
+pub(crate) fn CompanyHeader(c: CompanyHeaderView) -> impl IntoView {
+    let name = c.name.clone().unwrap_or_else(|| c.ticker.clone());
+    let show_ticker = c.name.is_some();
+    let currency = c.currency.clone().unwrap_or_default();
+    // 涨跌方向决定语义色；缺涨跌幅时不着色，也不假装持平。
+    let direction = c.change_percent.map(|v| match v.cmp(&Decimal::ZERO) {
+        std::cmp::Ordering::Greater => "is-up",
+        std::cmp::Ordering::Less => "is-down",
+        std::cmp::Ordering::Equal => "is-flat",
+    });
+    view! {
+        <header class="company-header">
+            <div class="ch-identity">
+                <h2 class="ch-name">{name}</h2>
+                {show_ticker.then(|| view! { <span class="ch-ticker">{c.ticker.clone()}</span> })}
+            </div>
+            <div class="ch-quote">
+                {c.price.map(|p| view! {
+                    <span class="ch-price">
+                        {p.normalize().to_string()}
+                        {(!currency.is_empty()).then(|| view! {
+                            <small>{currency.clone()}</small>
+                        })}
+                    </span>
+                })}
+                {c.change_percent.map(|v| view! {
+                    <span class=move || format!("ch-change {}", direction.unwrap_or("is-flat"))>
+                        {format::signed_percent(v)}
+                    </span>
+                })}
+                {c.market_cap.map(|m| view! {
+                    <span class="ch-cap">"市值 " {format::compact_amount(m)}</span>
+                })}
+            </div>
+        </header>
+    }
 }
 
 /// 估值区间——刻度轴 + 逐法明细 + 关键假设。
@@ -486,11 +562,11 @@ pub(crate) fn CompletenessRow(completeness: u8) -> impl IntoView {
                 aria-valuenow=completeness
                 aria-valuemin="0"
                 aria-valuemax="100"
-                aria-label="数据完备度"
+                aria-label="事实覆盖"
             >
                 <span class="completeness-fill" style=move || format!("width:{completeness}%")></span>
             </div>
-            <span class="completeness-label">"数据完备度 " {completeness} "%"</span>
+            <span class="completeness-label">{completeness_phrase(completeness)}</span>
         </div>
     }
 }
@@ -618,7 +694,7 @@ fn evidence_summary(
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(value) = completeness {
-        parts.push(format!("完备度 {value}%"));
+        parts.push(completeness_phrase(value).to_string());
     }
     if sources_len > 0 {
         parts.push(format!("{sources_len} 个数据源"));
@@ -696,19 +772,32 @@ fn EvidencePanel(
 #[component]
 fn EvidenceLiveStrip(
     completeness: Option<u8>,
-    sources_len: usize,
+    sources: Vec<String>,
     guard: Option<GuardView>,
 ) -> impl IntoView {
-    if completeness.is_none() && sources_len == 0 && guard.is_none() {
+    if completeness.is_none() && sources.is_empty() && guard.is_none() {
         return ().into_view();
     }
-    let summary_text = evidence_summary(completeness, sources_len, guard.as_ref(), None);
+    let summary_text = evidence_summary(completeness, sources.len(), guard.as_ref(), None);
     view! {
         <div class="evidence-panel" aria-live="polite">
             <div class="evidence-live-strip">
                 <span class="evidence-summary-text">{summary_text}</span>
                 <span class="evidence-live-hint">"作答完成后可展开"</span>
             </div>
+            // 逐项列出已核到的源，而不是只报一个数字。等答案的十几秒里，用户看到的
+            // 应该是"哪些事实已经落地"，不是一个不透明的进度条——这是"让证据发声"
+            // 在过程中的兑现。源在 meta 到达时已全部确定，逐项渲染不引入假进度。
+            {(!sources.is_empty()).then(|| view! {
+                <ul class="evidence-live-sources">
+                    {sources.into_iter().map(|s| view! {
+                        <li>
+                            <span class="els-check" aria-hidden="true"></span>
+                            {s}
+                        </li>
+                    }).collect_view()}
+                </ul>
+            })}
         </div>
     }
     .into_view()
@@ -719,8 +808,9 @@ fn EvidenceLiveStrip(
 #[component]
 fn StreamingCard(
     stage: Option<ResearchStreamStage>,
+    meta_company: Option<CompanyHeaderView>,
     meta_completeness: Option<u8>,
-    meta_sources_len: usize,
+    meta_sources: Vec<String>,
     delta_text: String,
     guard: Option<GuardView>,
 ) -> impl IntoView {
@@ -737,6 +827,7 @@ fn StreamingCard(
     let current_stage_label = stage_label(stage.as_ref());
     view! {
         <div class="answer-card">
+            {meta_company.map(|c| view! { <CompanyHeader c=c /> })}
             <div class="answer-text-section">
                 <p class="stage-label" aria-live="polite">
                     <span class="stage-dot" aria-hidden="true"></span>
@@ -762,7 +853,7 @@ fn StreamingCard(
 
             <EvidenceLiveStrip
                 completeness=meta_completeness
-                sources_len=meta_sources_len
+                sources=meta_sources
                 guard=guard
             />
         </div>
@@ -835,6 +926,7 @@ fn DoneCard(res: AskResponse, on_regenerate: Callback<()>) -> impl IntoView {
     let answer_text = res.answer.clone();
     view! {
         <div class="answer-card">
+            {res.company.clone().map(|c| view! { <CompanyHeader c=c /> })}
             <div class="answer-text-section">
                 {match res.answer.clone() {
                     Some(text) => {
@@ -1082,42 +1174,53 @@ fn HistorySidebar(
                     }
                     Some(Ok(data)) => {
                         let active_id = active_id.clone();
-                        data.sessions.into_iter().map(|item| {
-                            let is_active = active_id.as_deref() == Some(item.id.as_str());
-                            let go_id = item.id.clone();
-                            let del_id = item.id.clone();
-                            let ticker = item.ticker.clone().unwrap_or_default();
-                            let updated = format::timestamp(&item.updated_at);
-                            let title = item.title.clone();
+                        // 按天分组：几十条平铺时"这是今天问的还是上周问的"完全读不出来，
+                        // 时间戳挤在每一行的副标题里也扫不动。分组把时间提到组标题上，
+                        // 组内每行就只剩问题本身与代码。
+                        group_sessions_by_day(data.sessions).into_iter().map(|(day, items)| {
+                            let active_id = active_id.clone();
                             view! {
-                                <div class=if is_active { "session-item is-active" } else { "session-item" }>
-                                    <button
-                                        class="session-item-main"
-                                        title=item.title.clone()
-                                        on:click=move |_| on_select.call(Some(go_id.clone()))
-                                    >
-                                        <span class="session-item-title">{item.title.clone()}</span>
-                                        <span class="session-item-meta">
-                                            {(!ticker.is_empty()).then(|| view! { <b>{ticker.clone()}</b> })}
-                                            <span>{updated.clone()}</span>
-                                        </span>
-                                    </button>
-                                    <button
-                                        class="session-item-delete"
-                                        title="删除这条研究记录"
-                                        aria-label=format!("删除研究记录 {title}")
-                                        on:click=move |ev| {
-                                            ev.stop_propagation();
-                                            let id = del_id.clone();
-                                            confirm_destructive(
-                                                "删除研究记录",
-                                                "这条研究会话的全部问答与证据将被删除，无法恢复。",
-                                                "删除记录",
-                                                Callback::new(move |_| on_delete.call(id.clone())),
-                                            );
+                                <section class="session-group">
+                                    <h3 class="session-group-title">{day}</h3>
+                                    {items.into_iter().map(|item| {
+                                        let is_active = active_id.as_deref() == Some(item.id.as_str());
+                                        let go_id = item.id.clone();
+                                        let del_id = item.id.clone();
+                                        let ticker = item.ticker.clone().unwrap_or_default();
+                                        let time = format::clock(&item.updated_at);
+                                        let title = item.title.clone();
+                                        view! {
+                                            <div class=if is_active { "session-item is-active" } else { "session-item" }>
+                                                <button
+                                                    class="session-item-main"
+                                                    title=item.title.clone()
+                                                    on:click=move |_| on_select.call(Some(go_id.clone()))
+                                                >
+                                                    <span class="session-item-title">{item.title.clone()}</span>
+                                                    <span class="session-item-meta">
+                                                        {(!ticker.is_empty()).then(|| view! { <b>{ticker.clone()}</b> })}
+                                                        <span>{time.clone()}</span>
+                                                    </span>
+                                                </button>
+                                                <button
+                                                    class="session-item-delete"
+                                                    title="删除这条研究记录"
+                                                    aria-label=format!("删除研究记录 {title}")
+                                                    on:click=move |ev| {
+                                                        ev.stop_propagation();
+                                                        let id = del_id.clone();
+                                                        confirm_destructive(
+                                                            "删除研究记录",
+                                                            "这条研究会话的全部问答与证据将被删除，无法恢复。",
+                                                            "删除记录",
+                                                            Callback::new(move |_| on_delete.call(id.clone())),
+                                                        );
+                                                    }
+                                                ><Icon name="trash" /></button>
+                                            </div>
                                         }
-                                    ><Icon name="trash" /></button>
-                                </div>
+                                    }).collect_view()}
+                                </section>
                             }
                         }).collect_view()
                     }
@@ -1281,11 +1384,12 @@ pub fn ResearchPage(
             let _ = activity.get();
             // 新增一轮时强制贴底（用户刚提交，必须看到自己的消息）。
             let force = previous.is_some_and(|count| turn_count > count);
-            request_animation_frame(move || {
-                if let Some(node) = scroll_target.get_untracked() {
-                    follow_bottom(&node, force);
-                }
-            });
+            // 节点在 effect 内取出——此刻组件一定还活着。rAF 回调只持有这个 DOM 引用，
+            // 不再回头读 NodeRef：回调可能在本组件卸载之后才执行（提交完立刻切到设置页
+            // 就会这样），那时信号已随作用域释放，读它会 panic「already been disposed」。
+            if let Some(node) = scroll_target.get_untracked() {
+                request_animation_frame(move || follow_bottom(&node, force));
+            }
             turn_count
         });
     }
@@ -1473,13 +1577,14 @@ pub fn ResearchPage(
                                             <div class="bubble assistant-bubble">
                                                 {move || match turn.status.get() {
                                                     TurnStatus::Streaming {
-                                                        stage, meta_completeness,
+                                                        stage, meta_company, meta_completeness,
                                                         meta_sources, delta_text, guard, ..
                                                     } => view! {
                                                         <StreamingCard
                                                             stage=stage
+                                                            meta_company=meta_company
                                                             meta_completeness=meta_completeness
-                                                            meta_sources_len=meta_sources.len()
+                                                            meta_sources=meta_sources
                                                             delta_text=delta_text
                                                             guard=guard
                                                         />
