@@ -440,6 +440,26 @@ pub struct AuthUserResponse {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "camelCase")]
+pub struct AccountSubscription {
+    pub plan_id: String,
+    pub plan_name: String,
+    pub tier: String,
+    pub status: String,
+    pub current_period_end: String,
+    pub max_daily_calls: i32,
+    pub features: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountResponse {
+    pub user: PublicUser,
+    pub subscription: Option<AccountSubscription>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AuthMeResponse {
     pub user: Option<PublicUser>,
     pub multi_user: bool,

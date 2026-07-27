@@ -10,6 +10,7 @@ mod filings;
 mod fmp;
 mod fundamentals;
 mod historical;
+mod hk_annual_report;
 mod hk_financials;
 mod hkex;
 mod market;
@@ -18,6 +19,7 @@ mod quality;
 mod quote;
 mod router;
 mod search;
+mod sec_companyfacts;
 mod stats;
 
 pub use calendar::{CalendarError, CalendarService};
@@ -29,6 +31,9 @@ pub use fundamentals::{
 };
 pub use historical::{
     HistoricalValuationError, HistoricalValuationService, HistoricalValuationSummary,
+};
+pub use hk_annual_report::{
+    HkAnnualReportError, HkAnnualReportRecovery, HkAnnualReportService, parse_annual_report_text,
 };
 pub use hk_financials::{
     HK_FINANCIALS_PARSER_VERSION, HkFinancialsError, HkFinancialsIngestError,
@@ -44,4 +49,7 @@ pub use router::{AdapterAuthorization, AdapterDescriptor, LicenseTier, select_ad
 pub use search::{
     FmpSearchService, FmpSymbolHit, SearchError, US_MAIN_EXCHANGES, best_us_name_hit,
     is_us_main_exchange,
+};
+pub use sec_companyfacts::{
+    SecCompanyFactsError, SecCompanyFactsService, SecFundamentals, SecPeriodBasis,
 };

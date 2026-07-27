@@ -29,6 +29,17 @@ pub struct AuthSessionRow {
     pub expires_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, FromRow)]
+pub struct AccountSubscriptionRow {
+    pub plan_id: String,
+    pub plan_name: String,
+    pub tier: String,
+    pub status: String,
+    pub current_period_end: DateTime<Utc>,
+    pub max_daily_calls: i32,
+    pub features: Vec<String>,
+}
+
 pub struct AuthRepository<'a> {
     pool: &'a Pool,
 }
@@ -90,6 +101,25 @@ impl<'a> AuthRepository<'a> {
             .execute(self.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn subscription_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<AccountSubscriptionRow>> {
+        Ok(sqlx::query_as::<_, AccountSubscriptionRow>(
+            "SELECT s.plan_id, p.name AS plan_name, p.tier, s.status, \
+                    s.current_period_end, p.max_daily_calls, \
+                    COALESCE(p.features, ARRAY[]::text[]) AS features \
+             FROM subscriptions s \
+             JOIN plans p ON p.id = s.plan_id \
+             WHERE s.user_id = $1 \
+             ORDER BY CASE WHEN s.status = 'active' THEN 0 ELSE 1 END, s.updated_at DESC \
+             LIMIT 1",
+        )
+        .bind(user_id)
+        .fetch_optional(self.pool)
+        .await?)
     }
 
     pub async fn create_invite(

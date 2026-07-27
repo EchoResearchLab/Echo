@@ -12,7 +12,7 @@
 //! 与 JS 的实质差异：**零二进制浮点**。选"量级上最接近的事实"原文用 `log10` 距离，这里改用
 //! Decimal 比值 `max(v/f, f/v)` 取最小——同序、且不引入任何浮点（红线 4）。
 
-use crate::valuation::{Filing, Financials, MarketSnapshot, Valuation};
+use crate::valuation::{Filing, Financials, MarketSnapshot, PeerAnchor, Valuation};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::{BTreeMap, BTreeSet};
@@ -218,6 +218,8 @@ pub struct RegistrySources<'a> {
     pub market: Option<&'a MarketSnapshot>,
     pub financials: Option<&'a Financials>,
     pub valuation: Option<&'a Valuation>,
+    /// 同业倍数在估值失败的降级路径也会直接喂给模型，必须先登记才能允许原样引用。
+    pub peer_anchor: Option<&'a PeerAnchor>,
     pub earnings_next_date: Option<&'a str>,
     /// 本轮喂给模型的公司公告。事实块明写"可引用表单类型与日期"，登记表就必须收下这些
     /// 日期——否则模型照着引用反被判"日期查无"的硬失败（实测 AAPL 引用 10-Q 2026-05-01
@@ -361,6 +363,12 @@ pub fn build_facts_registry(sources: &RegistrySources) -> FactsRegistry {
             "历史PE当前倍数",
             "financialsData.historicalValuation",
         );
+    }
+
+    if let Some(peer) = sources.peer_anchor {
+        reg.push_multiple(Some(peer.p25), "同业倍数 p25", "peerAnchor");
+        reg.push_multiple(Some(peer.median), "同业倍数中位", "peerAnchor");
+        reg.push_multiple(Some(peer.p75), "同业倍数 p75", "peerAnchor");
     }
 
     // 估值输出：次优先级——自己的确定性计算，可信但排在原始事实之后。

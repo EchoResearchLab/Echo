@@ -1,5 +1,17 @@
 # 港股财报结构化 ingest
 
+## 研究时的自动补救
+
+研究主链读不到 `hk_financials` 时，`ResearchOrchestrator` 会把 `financial_statements` /
+`ttm_eps` 等缺口交给数据端。数据端只在第一轮调用 HKEX 官方发现接口，选择最近 FY 业绩
+公告 PDF：
+
+- PDF 必须来自 `hkexnews.hk` / `hkex.com.hk`；
+- 纯 Rust 提取文本，金额单位声明必须在同一行明确出现币种与单位；
+- 收入、上期收入、净利润、上期净利润是最低成组要求；
+- 解析结果仍必须经过本文既有的 `normalize_hk_financials` 与数量级质量门才可写库；
+- 严格解析失败时只把官方公告作为 filing 证据返回，财务字段保持 `None`。
+
 先从 HKEX 披露易发现最近两年的官方业绩公告：
 
 ```bash

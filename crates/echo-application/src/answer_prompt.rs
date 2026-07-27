@@ -7,7 +7,11 @@
 
 use crate::DecisionPanel;
 use crate::research::PriorTurn;
-use echo_domain::{Evidence, Filing, Financials, MarketSnapshot, ResearchDepth};
+use crate::research_memory::{CompanyMemory, memory_prompt_block};
+use crate::research_orchestrator::ResearchDegradation;
+use echo_domain::{
+    Evidence, Filing, Financials, MarketSnapshot, MultipleType, PeerAnchor, ResearchDepth,
+};
 use rust_decimal::Decimal;
 
 /// 作答上下文——本请求这一家公司的全部已核事实（单一主体，无跨公司泄漏面）。
@@ -115,6 +119,89 @@ pub fn build_user_prompt(ctx: &AnswerContext) -> String {
     out.push('\n');
     out.push_str(&facts_block(ctx));
     out
+}
+
+/// 聊天/报告主链使用的增强提示词：在本轮事实块之后追加显式降级约束与跨会话定性记忆。
+/// 旧记忆不进入 `FactsRegistry`，数字已在 [`memory_prompt_block`] 中遮蔽。
+#[must_use]
+pub fn build_research_user_prompt(
+    ctx: &AnswerContext,
+    memory: Option<&CompanyMemory>,
+    peer_anchor: Option<&PeerAnchor>,
+    degradation: ResearchDegradation,
+) -> String {
+    let mut out = build_user_prompt(ctx);
+    out.push_str(&supplemental_research_context(
+        memory,
+        peer_anchor,
+        degradation,
+    ));
+    out
+}
+
+pub(crate) fn supplemental_research_context(
+    memory: Option<&CompanyMemory>,
+    peer_anchor: Option<&PeerAnchor>,
+    degradation: ResearchDegradation,
+) -> String {
+    let mut out = String::new();
+    if let Some(peer) = peer_anchor {
+        out.push_str(&peer_anchor_block("已核到的同业倍数对照", peer));
+    }
+    match degradation {
+        ResearchDegradation::PeerComparisonOnly => out.push_str(
+            "\n降级规则：本轮公司自身估值未能成立，只回答同业倍数分布与可比性限制；\
+             不给目标价、估值区间或隐含上涨空间。\n",
+        ),
+        ResearchDegradation::QualitativeOnly => out.push_str(
+            "\n降级规则：本轮一手财务仍未核到，只做定性研究并列出待验证项；\
+             不给任何财务数字或估值结论。\n",
+        ),
+        ResearchDegradation::None => {}
+    }
+    out.push_str(&memory_prompt_block(memory));
+    out
+}
+
+pub(crate) fn compare_recovery_context(
+    label: &str,
+    peer_anchor: Option<&PeerAnchor>,
+    degradation: ResearchDegradation,
+) -> String {
+    let mut out = String::new();
+    if let Some(peer) = peer_anchor {
+        out.push_str(&peer_anchor_block(
+            &format!("{label} 已核到的同业倍数对照"),
+            peer,
+        ));
+    }
+    match degradation {
+        ResearchDegradation::PeerComparisonOnly => out.push_str(&format!(
+            "\n{label} 降级规则：自身估值未能成立，只比较同业倍数分布与可比性限制，\
+             不给该公司的目标价、估值区间或隐含上涨空间。\n"
+        )),
+        ResearchDegradation::QualitativeOnly => out.push_str(&format!(
+            "\n{label} 降级规则：一手财务仍未核到，只做定性比较，不给该公司的财务数字或估值结论。\n"
+        )),
+        ResearchDegradation::None => {}
+    }
+    out
+}
+
+fn peer_anchor_block(heading: &str, peer: &PeerAnchor) -> String {
+    let multiple = match peer.multiple_type {
+        MultipleType::Pe => "PE",
+        MultipleType::EvSales => "EV/Sales",
+    };
+    format!(
+        "\n\n== {heading} ==\n\
+         {multiple} 分位：p25 {}x / 中位 {}x / p75 {}x；样本公司（{}）。\n\
+         这些数字只描述同业分布；公司自身估值基数缺失时，不得据此反推目标价。\n",
+        peer.p25,
+        peer.median,
+        peer.p75,
+        peer.tickers.join("、")
+    )
 }
 
 /// 单公司「已核到的事实」块——`build_user_prompt` 与深度报告提示词（`report.rs`）共用同一份

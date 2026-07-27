@@ -14,7 +14,7 @@
 use crate::api;
 use crate::dialog::confirm_destructive;
 use crate::format;
-use crate::icons::{EchoArt, Icon};
+use crate::icons::{EchoArt, EchoMark, Icon};
 use echo_contracts::{
     AnswerSource, AskRequest, AskResponse, CitationGuardView, CompanyHeaderView, CompareLegView,
     CompareResponse, Decimal, EarningsCalendarView, EvidenceView, GuardView, MutationResponse,
@@ -32,6 +32,7 @@ const STREAM_TIMEOUT_MS: i32 = 120_000;
 enum TurnStatus {
     Streaming {
         stage: Option<ResearchStreamStage>,
+        stages: Vec<ResearchStreamStage>,
         meta_route: Option<RouteView>,
         meta_company: Option<CompanyHeaderView>,
         meta_valuation: Option<ValuationView>,
@@ -55,6 +56,7 @@ impl TurnStatus {
     fn streaming_default() -> Self {
         Self::Streaming {
             stage: None,
+            stages: Vec::new(),
             meta_route: None,
             meta_company: None,
             meta_valuation: None,
@@ -150,25 +152,34 @@ fn intent_label(s: &str) -> &str {
     }
 }
 
-fn stage_label(stage: Option<&ResearchStreamStage>) -> String {
-    let label = match stage.map(|stage| stage.name) {
-        None => "正在规划研究路径…",
-        Some(ResearchStreamStageName::Routing) => "正在判断研究意图…",
-        Some(ResearchStreamStageName::Resolving) => "正在确认研究主体…",
-        Some(ResearchStreamStageName::MarketFinancials) => "正在核对行情与财报…",
-        Some(ResearchStreamStageName::Evidence) => "正在检索网页证据…",
-        Some(ResearchStreamStageName::Valuation) => "正在构建估值框架…",
-        Some(ResearchStreamStageName::Generating) => "正在综合证据并作答…",
-        Some(ResearchStreamStageName::FactCheck) => "正在核对事实与引用…",
-        Some(ResearchStreamStageName::Assembling) => "正在组装事实…",
-        Some(ResearchStreamStageName::Verifying) => "正在核对数字护栏…",
-        Some(ResearchStreamStageName::Persisting) => "正在落库…",
-    };
-    match stage {
-        Some(stage) if stage.index > 0 && stage.total > 0 => {
-            format!("第 {}/{} 步 · {label}", stage.index, stage.total)
-        }
-        _ => label.to_string(),
+fn stage_activity(name: Option<ResearchStreamStageName>) -> &'static str {
+    match name {
+        None => "正在理解你的问题与研究目标",
+        Some(ResearchStreamStageName::Routing) => "正在理解问题意图与研究深度",
+        Some(ResearchStreamStageName::Resolving) => "正在确认公司、证券代码与研究主体",
+        Some(ResearchStreamStageName::MarketFinancials) => "正在核对实时行情、财报与关键指标",
+        Some(ResearchStreamStageName::Evidence) => "正在检索原始披露、网页证据与反例",
+        Some(ResearchStreamStageName::Valuation) => "正在建立估值框架与关键假设",
+        Some(ResearchStreamStageName::Generating) => "正在综合证据并组织研究结论",
+        Some(ResearchStreamStageName::FactCheck) => "正在核对事实、数字与引用",
+        Some(ResearchStreamStageName::Assembling) => "正在整理已经核实的研究事实",
+        Some(ResearchStreamStageName::Verifying) => "正在检查数字护栏与结论边界",
+        Some(ResearchStreamStageName::Persisting) => "正在保存本轮研究上下文",
+    }
+}
+
+fn stage_short_label(name: ResearchStreamStageName) -> &'static str {
+    match name {
+        ResearchStreamStageName::Routing => "理解问题",
+        ResearchStreamStageName::Resolving => "确认主体",
+        ResearchStreamStageName::MarketFinancials => "核对财务",
+        ResearchStreamStageName::Evidence => "检索证据",
+        ResearchStreamStageName::Valuation => "估值框架",
+        ResearchStreamStageName::Generating => "综合作答",
+        ResearchStreamStageName::FactCheck => "事实核验",
+        ResearchStreamStageName::Assembling => "整理事实",
+        ResearchStreamStageName::Verifying => "数字护栏",
+        ResearchStreamStageName::Persisting => "保存会话",
     }
 }
 
@@ -258,6 +269,7 @@ fn attach_stream(
         turn.status.update(|status| {
             let TurnStatus::Streaming {
                 stage,
+                stages,
                 meta_route,
                 meta_company,
                 meta_valuation,
@@ -283,7 +295,15 @@ fn attach_stream(
                     *meta_sources = m.connected_sources;
                     *meta_earnings = m.earnings;
                 }
-                ResearchStreamEvent::Stage(s) => *stage = Some(s),
+                ResearchStreamEvent::Stage(s) => {
+                    if !stages
+                        .iter()
+                        .any(|seen| seen.index == s.index && seen.name == s.name)
+                    {
+                        stages.push(s.clone());
+                    }
+                    *stage = Some(s);
+                }
                 ResearchStreamEvent::Delta(d) => delta_text.push_str(&d.text),
                 ResearchStreamEvent::Guard(g) => *guard = g.fact_guard,
                 ResearchStreamEvent::Final(_)
@@ -291,7 +311,8 @@ fn attach_stream(
                 | ResearchStreamEvent::Error(_) => unreachable!(),
             }
         });
-        on_activity.call(());
+        // 流式 delta 只增长当前答案，不再每个 token 强制贴底。逐字滚动会让整张页面
+        // 连续上移，用户看到的是抖动而不是流畅生成；终态与新消息仍会正常归位。
     };
 
     let on_error = move |message: String| {
@@ -804,97 +825,129 @@ fn EvidencePanel(
     .into_view()
 }
 
-/// 流式进行中的证据摘要条——和落地后的折叠面板同一行高、同一文案口径，但不可展开。
-/// 流式期间每个 token 都重渲染这张卡，`<details>` 的展开状态会被反复重置，所以这里
-/// 刻意不给交互，等落地后再变成真正可展开的面板。
+/// 流式进行中的卡片：直接展示服务端实际发来的研究阶段；只有文字高光移动，
+/// 容器与进度节点都保持静止，避免每个 token 重挂载时产生视觉抖动。
 #[component]
-fn EvidenceLiveStrip(
-    completeness: Option<u8>,
-    sources: Vec<String>,
-    guard: Option<GuardView>,
-) -> impl IntoView {
-    if completeness.is_none() && sources.is_empty() && guard.is_none() {
-        return ().into_view();
-    }
-    let summary_text = evidence_summary(completeness, sources.len(), guard.as_ref(), None);
-    view! {
-        <div class="evidence-panel" aria-live="polite">
-            <div class="evidence-live-strip">
-                <span class="evidence-summary-text">{summary_text}</span>
-                <span class="evidence-live-hint">"作答完成后可展开"</span>
-            </div>
-            // 逐项列出已核到的源，而不是只报一个数字。等答案的十几秒里，用户看到的
-            // 应该是"哪些事实已经落地"，不是一个不透明的进度条——这是"让证据发声"
-            // 在过程中的兑现。源在 meta 到达时已全部确定，逐项渲染不引入假进度。
-            {(!sources.is_empty()).then(|| view! {
-                <ul class="evidence-live-sources">
-                    {sources.into_iter().map(|s| view! {
-                        <li>
-                            <span class="els-check" aria-hidden="true"></span>
-                            {s}
-                        </li>
-                    }).collect_view()}
-                </ul>
-            })}
-        </div>
-    }
-    .into_view()
-}
-
-/// 流式进行中的卡片：阶段提示 + 从左到右的流动 + 打字机增量。
-/// 骨架不铺在答案上方——答案的位置从第一帧就固定。
-#[component]
-fn StreamingCard(
-    stage: Option<ResearchStreamStage>,
-    meta_company: Option<CompanyHeaderView>,
-    meta_completeness: Option<u8>,
-    meta_sources: Vec<String>,
-    delta_text: String,
-    guard: Option<GuardView>,
-) -> impl IntoView {
-    let has_text = !delta_text.is_empty();
-    let html = has_text.then(|| crate::markdown::render(&delta_text));
-    let progress_width = stage
-        .as_ref()
-        .filter(|stage| stage.index > 0 && stage.total > 0)
-        .map(|stage| {
-            let percent = stage.index.saturating_mul(100) / stage.total;
-            format!("width: {percent}%")
+fn StreamingCard(turn: Turn) -> impl IntoView {
+    // 思考进度与正文拆成两个 memo：delta 到达时只更新答案文本，不重挂思考过程。
+    // 这样左到右的文字高光可以连续播放，头像、卡片和阶段轨迹也不会每个 token 闪一下。
+    let stage_state = create_memo(move |_| {
+        turn.status.with(|status| match status {
+            TurnStatus::Streaming { stage, stages, .. } => (stage.clone(), stages.clone()),
+            _ => (None, Vec::new()),
         })
-        .unwrap_or_else(|| "width: 8%".to_string());
-    let current_stage_label = stage_label(stage.as_ref());
+    });
+    let delta_text = create_memo(move |_| {
+        turn.status.with(|status| match status {
+            TurnStatus::Streaming { delta_text, .. } => delta_text.clone(),
+            _ => String::new(),
+        })
+    });
     view! {
         <div class="answer-card">
-            {meta_company.map(|c| view! { <CompanyHeader c=c /> })}
             <div class="answer-text-section">
-                <p class="stage-label" aria-live="polite">
-                    <span class="stage-dot" aria-hidden="true"></span>
-                    {current_stage_label}
-                    <span class="thinking-wave" aria-hidden="true">
-                        <i></i><i></i><i></i><i></i><i></i>
-                    </span>
-                </p>
-                <div
-                    class="stage-progress"
-                    role="progressbar"
-                    aria-label="研究进度"
-                >
-                    <span class="stage-progress-fill" style=progress_width></span>
+                <div class="thinking-process" aria-live="polite">
+                    <div class="thinking-process-head">
+                        <span class="thinking-live-dot" aria-hidden="true"></span>
+                        <span>
+                            <strong class="thinking-shimmer">{move || {
+                                let (stage, _) = stage_state.get();
+                                stage_activity(stage.as_ref().map(|item| item.name))
+                            }}</strong>
+                            <small>{move || {
+                                let (stage, _) = stage_state.get();
+                                stage
+                                    .filter(|item| item.index > 0 && item.total > 0)
+                                    .map(|item| {
+                                        format!("真实模型链路 · {}/{}", item.index, item.total)
+                                    })
+                                    .unwrap_or_else(|| "正在准备研究链路".to_string())
+                            }}</small>
+                        </span>
+                    </div>
+                    <div class="thinking-trail" aria-label="已执行的模型步骤">
+                        {move || {
+                            let (stage, stages) = stage_state.get();
+                            let active = stage.as_ref().map(|item| (item.index, item.name));
+                            if stages.is_empty() {
+                                view! {
+                                    <span class="thinking-step is-current">
+                                        <i aria-hidden="true"></i>
+                                        "理解问题"
+                                    </span>
+                                }.into_view()
+                            } else {
+                                stages
+                                    .into_iter()
+                                    .map(|item| {
+                                        let class = if Some((item.index, item.name)) == active {
+                                            "thinking-step is-current"
+                                        } else {
+                                            "thinking-step is-complete"
+                                        };
+                                        view! {
+                                            <span class=class>
+                                                <i aria-hidden="true"></i>
+                                                {stage_short_label(item.name)}
+                                            </span>
+                                        }
+                                    })
+                                    .collect_view()
+                                    .into_view()
+                            }
+                        }}
+                    </div>
                 </div>
-                {match html {
-                    Some(html) => view! { <div class="answer-text is-streaming" inner_html=html></div> }.into_view(),
-                    None => view! {
-                        <div class="thinking-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>
-                    }.into_view(),
+                {move || {
+                    let text = delta_text.get();
+                    (!text.is_empty()).then(|| {
+                        let html = crate::markdown::render(&text);
+                        view! { <div class="answer-text is-streaming" inner_html=html></div> }
+                    })
                 }}
             </div>
-
-            <EvidenceLiveStrip
-                completeness=meta_completeness
-                sources=meta_sources
-                guard=guard
-            />
         </div>
+    }
+}
+
+#[component]
+fn TurnBody(turn: Turn, on_retry: Callback<()>) -> impl IntoView {
+    // Memo 只在 Streaming → 终态时通知父视图。流式期间 status 虽持续写入 delta，
+    // 这里的布尔值没有变化，因此 StreamingCard 不会被卸载重建。
+    let streaming = create_memo(move |_| turn.status.with(TurnStatus::is_streaming));
+    view! {
+        {move || {
+            if streaming.get() {
+                view! { <StreamingCard turn=turn /> }.into_view()
+            } else {
+                match turn.status.get() {
+                    TurnStatus::Done(response) => view! {
+                        <DoneCard res=response on_regenerate=on_retry />
+                    }.into_view(),
+                    TurnStatus::CompareDone(response) => view! {
+                        <CompareCard res=*response on_regenerate=on_retry />
+                    }.into_view(),
+                    TurnStatus::Archived(archived) => view! {
+                        <HistoryCard turn=*archived />
+                    }.into_view(),
+                    TurnStatus::Failed(message) => view! {
+                        <RetryableMessage
+                            message=message
+                            cancelled=false
+                            on_retry=on_retry
+                        />
+                    }.into_view(),
+                    TurnStatus::Cancelled => view! {
+                        <RetryableMessage
+                            message=String::new()
+                            cancelled=true
+                            on_retry=on_retry
+                        />
+                    }.into_view(),
+                    TurnStatus::Streaming { .. } => unreachable!(),
+                }
+            }
+        }}
     }
 }
 
@@ -1415,7 +1468,7 @@ pub fn ResearchPage(
     let on_persisted = Callback::new(move |_| sessions.refetch());
     let on_activity = Callback::new(move |_| activity.update(|value| *value += 1));
 
-    // 新消息与流式增量到达时让阅读位置跟到最新内容；用户向上翻历史时不打扰。
+    // 新消息与一轮终态到达时让阅读位置跟到最新内容；逐字增量不滚动，避免整页持续上移。
     #[cfg(target_arch = "wasm32")]
     {
         let scroll_target = conversation_ref;
@@ -1502,6 +1555,11 @@ pub fn ResearchPage(
         ("英伟达", "NVDA", "英伟达的护城河能维持多久？"),
         ("阿里巴巴", "9988.HK", "什么会证伪阿里巴巴的复苏？"),
     ];
+    let followups = [
+        "现在最值得关注的三个信号是什么？",
+        "什么情况会证伪当前判断？",
+        "用更简洁的结论总结一下。",
+    ];
 
     view! {
         <div class="research-shell">
@@ -1538,10 +1596,15 @@ pub fn ResearchPage(
                         <div class="echo-empty">
                             <EchoArt class="hero-echo-art" />
                             <div class="hero-heading-row">
+                                <p class="hero-kicker"><span aria-hidden="true"></span>"ECHO INTELLIGENCE"</p>
                                 <h1>
-                                    <span class="line-1">"让每一个判断，"</span>
-                                    <span class="line-2">"都有证据。"</span>
+                                    <span class="line-1">"让复杂信息，"</span>
+                                    <span class="line-2">"收敛成清晰判断。"</span>
                                 </h1>
+                                <p class="hero-copy">"从公司、估值、风险或证伪开始提问。ECHO 会连接可核验的数据与来源，给出有边界的研究答案。"</p>
+                                <div class="hero-trust-row" aria-label="研究能力">
+                                    <span>"实时行情"</span><i></i><span>"原始披露"</span><i></i><span>"数字护栏"</span>
+                                </div>
                             </div>
                             // 空态只留一层脚手架：标题 + 四个真实可点的研究入口。
                             // 原来的「研究主题」快捷词（"分析这家公司的…"）没有主体，
@@ -1602,57 +1665,33 @@ pub fn ResearchPage(
                                     view! {
                                         // user bubble——问题为主体，研究对象作为小标签而不是拼接文本
                                         <div class="message user">
-                                            <div class="bubble">
-                                                {move || {
-                                                    let label = turn.ticker.get();
-                                                    (!label.is_empty()).then(|| view! {
-                                                        <span class="bubble-ticker">{label}</span>
-                                                    })
-                                                }}
-                                                <p class="bubble-text">{turn.question.get_value()}</p>
+                                            <div class="user-message-stack">
+                                                <span class="message-author">"我的问题"</span>
+                                                <div class="bubble">
+                                                    {move || {
+                                                        let label = turn.ticker.get();
+                                                        (!label.is_empty()).then(|| view! {
+                                                            <span class="bubble-ticker">{label}</span>
+                                                        })
+                                                    }}
+                                                    <p class="bubble-text">{turn.question.get_value()}</p>
+                                                </div>
                                             </div>
                                         </div>
                                         // assistant card
-                                        <div class="message">
-                                            <div class="bubble assistant-bubble">
-                                                {move || match turn.status.get() {
-                                                    TurnStatus::Streaming {
-                                                        stage, meta_company, meta_completeness,
-                                                        meta_sources, delta_text, guard, ..
-                                                    } => view! {
-                                                        <StreamingCard
-                                                            stage=stage
-                                                            meta_company=meta_company
-                                                            meta_completeness=meta_completeness
-                                                            meta_sources=meta_sources
-                                                            delta_text=delta_text
-                                                            guard=guard
-                                                        />
-                                                    }.into_view(),
-                                                    TurnStatus::Done(response) => view! {
-                                                        <DoneCard res=response on_regenerate=on_retry />
-                                                    }.into_view(),
-                                                    TurnStatus::CompareDone(response) => view! {
-                                                        <CompareCard res=*response on_regenerate=on_retry />
-                                                    }.into_view(),
-                                                    TurnStatus::Archived(archived) => view! {
-                                                        <HistoryCard turn=*archived />
-                                                    }.into_view(),
-                                                    TurnStatus::Failed(message) => view! {
-                                                        <RetryableMessage
-                                                            message=message
-                                                            cancelled=false
-                                                            on_retry=on_retry
-                                                        />
-                                                    }.into_view(),
-                                                    TurnStatus::Cancelled => view! {
-                                                        <RetryableMessage
-                                                            message=String::new()
-                                                            cancelled=true
-                                                            on_retry=on_retry
-                                                        />
-                                                    }.into_view(),
-                                                }}
+                                        <div class="message assistant">
+                                            <div class="assistant-message">
+                                                <div class="assistant-identity">
+                                                    <span class="assistant-avatar"><EchoMark /></span>
+                                                    <span>
+                                                        <strong>"ECHO"</strong>
+                                                        <small>"RESEARCH INTELLIGENCE"</small>
+                                                    </span>
+                                                    <i aria-hidden="true"></i>
+                                                </div>
+                                                <div class="bubble assistant-bubble">
+                                                    <TurnBody turn=turn on_retry=on_retry />
+                                                </div>
                                             </div>
                                         </div>
                                     }
@@ -1667,7 +1706,30 @@ pub fn ResearchPage(
             // 里面只有一个输入框和一个按钮：没有研究对象选择器（主体由服务端识别）、
             // 没有第二条提交通道、没有快捷键说明和免责小字。
             <div class="composer">
+                {move || (has_thread() && !subject.get().is_empty()).then(|| view! {
+                    <div class="composer-suggestions" aria-label="快捷追问">
+                        {followups.into_iter().map(|prompt| view! {
+                            <button
+                                disabled=pending
+                                on:click=move |_| {
+                                    set_question.set(prompt.to_string());
+                                    submit();
+                                }
+                            >{prompt}</button>
+                        }).collect_view()}
+                    </div>
+                })}
                 <div class="composer-panel">
+                    {move || {
+                        let current = subject.get();
+                        (!current.is_empty()).then(|| view! {
+                            <div class="composer-context">
+                                <span aria-hidden="true"></span>
+                                <b>{current}</b>
+                                <small>"当前研究主题"</small>
+                            </div>
+                        })
+                    }}
                     <textarea
                         node_ref=composer_ref
                         prop:value=question
@@ -1684,7 +1746,11 @@ pub fn ResearchPage(
                                 submit();
                             }
                         }
-                        placeholder="问一个关于公司的问题"
+                        placeholder=move || if subject.get().is_empty() {
+                            "输入公司、代码或你想研究的问题".to_string()
+                        } else {
+                            format!("继续追问 {}…", subject.get())
+                        }
                         aria-label="研究问题"
                         rows="1"
                     />

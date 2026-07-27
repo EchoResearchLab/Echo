@@ -20,10 +20,10 @@
 | --- | --- | --- | --- |
 | 金融算术 | `finance-core` | 完成 | 完成：Decimal 金额、比率、盈亏、收益惊喜、估值不变量 |
 | 意图/估值/护栏 | `echo-domain` | 完成 | 核心可用；需对照恢复后的 QA 语料持续回归 |
-| 研究编排 | `echo-application` | 骨架→收口中 | 事实映射/提示词/模型网关可用；统一 `ResearchService` 与完整取数链仍在收口（见《生产闭环待办》） |
+| 研究编排 | `echo-application` | 收口中 | `ResearchOrchestrator` 已实现意图相关完备度评估、缺口驱动换源、最多 2 轮与无进展早停；`ResearchService`/报告/流式共用；真实供应商 canary 仍待预生产 |
 | HTTP/API | `echo-api` | 基础竖切 | 约 20/45 旧契约；研究链仍偏重 API 边界 |
 | 数据库 | `echo-db` | 迁移 + 部分仓储 | auth/workspace/operations/market/scheduler 部分完成；多表缺 Rust 读写 |
-| 外部数据 | `echo-data` | 行情竖切 | Finnhub→Yahoo quote 可用；FMP/Tavily/公告/同业/日历待接线 |
+| 外部数据 | `echo-data` | 多源竖切 | Finnhub→Yahoo 行情、FMP 主财务、SEC Company Facts 财务补救、HKEX FY PDF 严格解析补救、网页证据/公告/同业/日历已接线；真实供应商 canary 待预生产 |
 | 后台 | `echo-worker` | 8 个 cron 定义 | 活动可跑；多实例租约仍需在预生产演练 |
 | Web | `echo-web` | 基础页面 | 登录/研究/自选/持仓/设置可用；流式、历史深链、证据卡未平价 |
 | 浏览器验收 | `echo-e2e` | 骨架 | 核心流程存在但默认 ignored，需外部 WebDriver |
@@ -63,6 +63,7 @@ cargo test -p echo-domain --test intent_routing_corpus
 结构迁移已完成，以下为进入生产前仍需闭合的通道（每条须真数据端到端验证，不以“能编译”代替）：
 
 - **研究主链平价**：统一 `ResearchService` 与完整取数链（FMP 基本面、公告/同业/日历、对比双腿证据）逐条从 pending 转为已验收。
+- **Agentic 补救 canary**：用真实缺 TTM EPS 美股、缺 `hk_financials` 港股、估值失败但有同业锚点三组探针，验证 SEC 换源、HKEX FY PDF 回填/仅公告降级、同业对照降级；离线循环与解析测试已覆盖。
 - **Worker 生产化**：多实例租约抢占在预生产做双实例竞争演练，确认同一作业同一时刻只有一个实例执行。
 - **观测**：`OTEL_EXPORTER_OTLP_ENDPOINT` 非空时挂 OTLP span 导出，API/Worker 每请求/每作业 span，优雅停机排空批处理队列。
 - **验收去 ignore**：活库认证、DB 调度状态、DB workspace/RLS、真实浏览器 E2E 四项集成测试当前默认 `#[ignore]`，需外部依赖就绪后转为门禁。
@@ -73,4 +74,5 @@ cargo test -p echo-domain --test intent_routing_corpus
 - 接入已签署商业协议的行情/财报适配器，并补充真实供应商 canary。
 - 将更多一手公告/港交所披露解析接入 `echo-data`，保持 bitemporal 与来源 URL。
 - 为研究历史增加报告导出与画像编辑页面；服务端能力需先在矩阵中从 pending 变为已验收。
+- 公司档案已自动跨会话读写：只回放遮蔽数字后的定性线索，护栏通过后更新 Markdown 自动段与已核估值字段；后续补“自动段/手工段”在 UI 上的差异化审阅。
 - 在预生产跑 RLS 双租户、备份恢复、外部源故障和 Worker 重启联合演练。

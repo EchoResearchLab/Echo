@@ -25,9 +25,9 @@
 
   /* ── 纸面与墨色：真中性灰 ───────────────────────────────────────────── */
   --paper-raised: #ffffff;
-  --paper-canvas: #f5f5f7;
-  --paper-sunken: #ededf0;
-  --paper-inset: #e5e5ea;
+  --paper-canvas: #f4f8fd;
+  --paper-sunken: #edf3fa;
+  --paper-inset: #e2eaf3;
 
   /* 三、四级墨色比苹果自己的（#6e6e73 / #86868b）各压深一档。苹果那两个值对
      #f5f5f7 只有 4.66:1 和 3.33:1，后者不过 WCAG AA——apple.com 上是这样，
@@ -47,9 +47,9 @@
   --brand-900: #002b5c;
   --brand-800: #003d80;
   --brand-700: #0055a5;
-  --brand-600: #0071e3;
-  --brand-500: #007aff;
-  --brand-400: #4a9bff;
+  --brand-600: #1683f8;
+  --brand-500: #2692ff;
+  --brand-400: #69b4ff;
   --brand-200: #a9d1ff;
   --brand-100: #d5e8ff;
   --brand-050: #eef5ff;
@@ -57,13 +57,13 @@
   /* 唯一交互色：可操作 / 选中 / 聚焦 / 进度。不承担装饰。 */
   --brand: var(--brand-600);
   /* 悬停变亮而不是变暗——苹果的按钮是"迎上来"，不是"陷下去"。 */
-  --brand-hover: #0077ed;
-  --brand-active: #0062c4;
+  --brand-hover: #2a91ff;
+  --brand-active: #0872db;
   /* 纸面上的品牌文字：对 --paper-canvas 达到 AA。 */
-  --brand-ink: #0062c4;
-  --brand-tint: rgba(0, 113, 227, 0.08);
-  --brand-tint-strong: rgba(0, 113, 227, 0.14);
-  --brand-ring: rgba(0, 113, 227, 0.22);
+  --brand-ink: #0872db;
+  --brand-tint: rgba(22, 131, 248, 0.08);
+  --brand-tint-strong: rgba(22, 131, 248, 0.14);
+  --brand-ring: rgba(22, 131, 248, 0.20);
 
   /* ── 语义色：涨跌与风险专用，不与强调色混用 ───────────────────────── */
   --danger: #d70015;
@@ -124,16 +124,16 @@
   --r-xs: 6px;
   --r-sm: 8px;
   --r-md: 12px;
-  --r-lg: 16px;
-  --r-xl: 22px;
+  --r-lg: 18px;
+  --r-xl: 26px;
   --r-full: 999px;
 
   /* ── 层级（低对比柔和阴影；不做重投影）──────────────────────────── */
   --e-1: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --e-2: 0 1px 3px rgba(0, 0, 0, 0.04), 0 6px 16px -6px rgba(0, 0, 0, 0.10);
-  --e-3: 0 2px 6px rgba(0, 0, 0, 0.04), 0 18px 40px -14px rgba(0, 0, 0, 0.14);
-  --e-pop: 0 4px 10px rgba(0, 0, 0, 0.06), 0 26px 60px -18px rgba(0, 0, 0, 0.20);
-  --e-brand: 0 1px 2px rgba(0, 60, 130, 0.16), 0 8px 20px -8px rgba(0, 60, 130, 0.28);
+  --e-2: 0 1px 2px rgba(13, 47, 83, 0.04), 0 10px 28px -14px rgba(30, 80, 130, 0.18);
+  --e-3: 0 2px 6px rgba(13, 47, 83, 0.05), 0 24px 60px -24px rgba(30, 80, 130, 0.26);
+  --e-pop: 0 6px 18px rgba(13, 47, 83, 0.08), 0 34px 80px -24px rgba(30, 80, 130, 0.30);
+  --e-brand: 0 2px 4px rgba(8, 89, 179, 0.16), 0 12px 28px -10px rgba(22, 131, 248, 0.36);
 
   /* ── 动效 ───────────────────────────────────────────────────────────── */
   --dur-1: 120ms; /* 颜色/透明度等原地状态 */
@@ -151,19 +151,19 @@
   --tap-min: 44px;
 
   /* ── 布局 ───────────────────────────────────────────────────────────── */
-  --rail-w: 276px;
-  --topbar-h: 56px;
-  --content-max: 1080px;
+  --rail-w: 288px;
+  --topbar-h: 64px;
+  --content-max: 1160px;
   /* 长文阅读行宽上限：中文约 42–46 字/行。 */
-  --read-max: 748px;
+  --read-max: 820px;
   --gutter: clamp(20px, 4vw, 48px);
 
   /* ── 功能性玻璃 ─────────────────────────────────────────────────────
      只用于顶栏、浮层与编辑器。苹果的毛玻璃不是"半透明白"，而是
      背景饱和度提升 + 大半径模糊 + 一道内侧顶部高光 + 极细的低对比描边。
      三样缺一样就会显得脏或平。 */
-  --glass: rgba(255, 255, 255, 0.72);
-  --glass-strong: rgba(255, 255, 255, 0.86);
+  --glass: rgba(255, 255, 255, 0.76);
+  --glass-strong: rgba(255, 255, 255, 0.90);
   --glass-blur: saturate(1.8) blur(30px);
   --glass-line: rgba(0, 0, 0, 0.06);
   /* 玻璃里的凹槽轨道（分段控件底），中性灰，不带色相。 */
