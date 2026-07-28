@@ -31,6 +31,9 @@ pub fn App() -> impl IntoView {
         |_| api::get::<AuthMeResponse>("/api/auth/me"),
     );
     let refresh_auth = Callback::new(move |_| set_auth_epoch.update(|value| *value += 1));
+    // 会话过期时把用户送回登录页。重新拉一次 /api/auth/me 即可：拿到 user=None
+    // 就会渲染 LoginPage，登录后原路返回（URL 没动过，深链仍在）。
+    api::on_unauthorized(refresh_auth);
     view! {
         <Suspense fallback=move || view! { <main class="boot-screen">"ECHO"</main> }>
             {move || match auth.get() {
@@ -53,5 +56,10 @@ pub fn start() {
     std::panic::set_hook(Box::new(|info| {
         leptos::logging::error!("echo-web panic: {info}");
     }));
+    // index.html 里的静态首屏骨架已经完成它的使命——`mount_to_body` 是追加，
+    // 不清掉会和 Suspense 的同款占位并排出现两个 ECHO。
+    if let Some(node) = leptos::document().query_selector("#boot").ok().flatten() {
+        node.remove();
+    }
     leptos::mount_to_body(App);
 }

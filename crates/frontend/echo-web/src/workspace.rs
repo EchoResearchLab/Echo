@@ -129,6 +129,41 @@ fn initial_page() -> Page {
     Page::Research(ResearchEntry::default())
 }
 
+/// 品牌基名。没有更具体的上下文时用完整的品牌标题。
+///
+/// 只在 wasm 目标有读者（原生目标编译 lib 时标题设置整段是空实现），
+/// 与本文件里 `STORAGE_KEY` 那类常量同一处理。
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+const TITLE_BASE: &str = "Echo Research";
+
+/// 设置标签页标题。`None` 表示没有更具体的上下文，退回品牌标题。
+///
+/// 传进来的文本会被截断——标签栏只显示很窄的一段，超长标题在标签里只剩省略号，
+/// 反而不如短句能区分。
+pub(crate) fn set_document_title(context: Option<String>) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        const MAX_CHARS: usize = 28;
+        let title = match context {
+            Some(text) if !text.trim().is_empty() => {
+                let text = text.trim();
+                let short: String = if text.chars().count() > MAX_CHARS {
+                    text.chars().take(MAX_CHARS).collect::<String>() + "…"
+                } else {
+                    text.to_string()
+                };
+                format!("{short} · {TITLE_BASE}")
+            }
+            _ => format!("{TITLE_BASE} · 让证据发声"),
+        };
+        leptos::document().set_title(&title);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = context;
+    }
+}
+
 fn navigate(set_page: WriteSignal<Page>, page: Page) {
     #[cfg(target_arch = "wasm32")]
     let path = page.path();
@@ -212,6 +247,16 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
     let stage_ref = create_node_ref::<html::Section>();
     install_popstate_listener(set_page);
     install_escape_close(account_open, set_account_open);
+    // 标题跟随当前切面。研究是天然多标签页的活儿——同时开着三家公司很正常，
+    // 而标题此前恒为 "Echo Research · 让证据发声"，标签栏上三个页签长得一模一样，
+    // 等于没有标签栏。研究页的标题由 ResearchPage 用当轮问题进一步细化。
+    create_effect(move |_| {
+        set_document_title(match page.get() {
+            Page::Research(_) => None,
+            Page::Library(tab) => Some(tab.label().to_string()),
+            Page::Settings => Some("设置".to_string()),
+        });
+    });
     #[cfg(target_arch = "wasm32")]
     create_effect(move |_| {
         let _ = page.get();
@@ -440,6 +485,12 @@ pub fn LoginPage(on_authenticated: Callback<()>) -> impl IntoView {
     let (invite, set_invite) = create_signal(String::new());
     let (display_name, set_display_name) = create_signal(String::new());
     let (transitioning, set_transitioning) = create_signal(false);
+    // 会话过期被送回登录页时，标题还停在上一条研究上会让人以为页面没变。
+    create_effect(move |_| {
+        set_document_title(Some(
+            if register.get() { "注册" } else { "登录" }.to_string(),
+        ));
+    });
     let submit = create_action(|input: &AuthSubmission| {
         let input = input.clone();
         async move {

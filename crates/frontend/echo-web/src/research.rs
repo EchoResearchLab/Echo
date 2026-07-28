@@ -1596,6 +1596,13 @@ pub fn ResearchPage(
     };
 
     let has_thread = move || !thread.get().is_empty();
+    // 标签页标题用**这轮对话的第一个问题**，而不是股票代码：一个人同时开三个页签研究
+    // 三家公司时，"苹果的盈利质量正在变化吗?" 比 "AAPL" 更能一眼认出是哪一条。
+    // 空对话不写，退回品牌标题。
+    create_effect(move |_| {
+        let first = thread.with(|turns| turns.first().map(|turn| turn.question.get_value()));
+        crate::workspace::set_document_title(first);
+    });
     let awaiting_session = initial_session.is_some();
     // 首屏的高频研究入口：只给公司与问题，不编造"12 条证据"这类没有来源的数字。
     let curated: [(&str, &str, &str); 4] = [
