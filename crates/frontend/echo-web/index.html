@@ -1,9 +1,16 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<!-- 不写死 data-theme。令牌层的"跟随系统"靠**没有** data-theme 属性生效（见 theme.rs），
+     这里钉一个 light 会让系统深色的用户先吃一整屏白底，直到 WASM 起来才翻黑——
+     1.6MB WASM 的下载与实例化期间，那就是一次实打实的闪白。
+     用户显式选过浅/深色时，WASM 启动后照旧覆盖。 -->
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#f5f5f7" />
+    <!-- 与 --paper-canvas 对齐，并且分明暗两套；原来单写一个 #f5f5f7 既不是画布色，
+         也让深色下的浏览器 UI 仍是浅的。 -->
+    <meta name="theme-color" content="#f4f8fd" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#141416" media="(prefers-color-scheme: dark)" />
     <meta name="description" content="Echo Research — evidence-first intelligence for public-market research." />
     <meta property="og:title" content="Echo Research · 让证据发声" />
     <meta property="og:description" content="面向公开市场的证据优先研究工作台。" />
@@ -29,5 +36,12 @@
     <link data-trunk rel="css" href="styles/09-responsive.css" />
     <link data-trunk rel="copy-file" href="assets/og.png" />
   </head>
-  <body></body>
+  <!-- 首屏骨架。body 原来是空的：CSS 到位后到 WASM 挂载之间的那一段（1.6MB 下载 +
+       实例化，慢网上是好几秒）用户看到的是一整屏纯白，什么都没有。
+       这段静态标记随 HTML 一起到达，样式复用 .boot-screen（令牌化，深浅两色自洽），
+       并且自带 160ms 延迟淡入——快网上 WASM 早就挂载完了，它一帧都不会露出来，
+       只有真的慢时才顶上。挂载前由 start() 移除。 -->
+  <body>
+    <main id="boot" class="boot-screen">ECHO</main>
+  </body>
 </html>

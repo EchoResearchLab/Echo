@@ -1,14 +1,62 @@
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+// 会话失效的回调，由 `App` 在根注入。
+//
+// 服务端对过期会话返回 401「请先登录」。此前这条和别的错误一样被当成字符串内联渲染，
+// 于是用户停在一个每块面板都写着"请先登录"的工作台上——按钮还在、点了还是 401，
+// 没有任何东西告诉他"你该重新登录了"，只能自己想到去刷新页面。会话过期是产品必然
+// 会发生的状态，不是异常，必须自己走回登录页。
+//
+// WASM 是单线程，用 `thread_local` 存回调即可，不必为此引入自定义 DOM 事件。
+// SESSION_LOST：已经通知过就不再重复——一屏上并发的多个请求会同时撞 401，
+// 每个都触发一次重新鉴权是纯浪费。任何一次成功响应都会把它复位。
 #[cfg(target_arch = "wasm32")]
-async fn decode<T: DeserializeOwned>(response: gloo_net::http::Response) -> Result<T, String> {
+thread_local! {
+    static ON_UNAUTHORIZED: std::cell::RefCell<Option<leptos::Callback<()>>> =
+        const { std::cell::RefCell::new(None) };
+    static SESSION_LOST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// 注册会话失效回调。只在根组件调用一次。
+#[cfg(target_arch = "wasm32")]
+pub fn on_unauthorized(callback: leptos::Callback<()>) {
+    ON_UNAUTHORIZED.with(|slot| *slot.borrow_mut() = Some(callback));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn on_unauthorized(_callback: leptos::Callback<()>) {}
+
+#[cfg(target_arch = "wasm32")]
+fn notify_unauthorized() {
+    if SESSION_LOST.with(std::cell::Cell::get) {
+        return;
+    }
+    SESSION_LOST.with(|flag| flag.set(true));
+    use leptos::Callable;
+    let callback = ON_UNAUTHORIZED.with(|slot| *slot.borrow());
+    if let Some(callback) = callback {
+        callback.call(());
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn decode<T: DeserializeOwned>(
+    path: &str,
+    response: gloo_net::http::Response,
+) -> Result<T, String> {
     let status = response.status();
     if response.ok() {
+        SESSION_LOST.with(|flag| flag.set(false));
         return response
             .json::<T>()
             .await
             .map_err(|error| format!("响应解析失败：{error}"));
+    }
+    // `/api/auth/*` 自己就是登录流程：登录密码错也是 401，拿它去"回登录页"既没意义，
+    // 还会把刚渲染出来的错误提示冲掉。
+    if status == 401 && !path.starts_with("/api/auth/") {
+        notify_unauthorized();
     }
     let body = response.text().await.unwrap_or_default();
     let message = serde_json::from_str::<echo_contracts::ErrorResponse>(&body)
@@ -23,7 +71,7 @@ pub async fn get<T: DeserializeOwned>(path: &str) -> Result<T, String> {
         .send()
         .await
         .map_err(|error| format!("请求失败：{error}"))?;
-    decode(response).await
+    decode(path, response).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -42,7 +90,7 @@ pub async fn post<I: Serialize + ?Sized, O: DeserializeOwned>(
         .send()
         .await
         .map_err(|error| format!("请求失败：{error}"))?;
-    decode(response).await
+    decode(path, response).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -64,7 +112,7 @@ pub async fn patch<I: Serialize + ?Sized, O: DeserializeOwned>(
         .send()
         .await
         .map_err(|error| format!("请求失败：{error}"))?;
-    decode(response).await
+    decode(path, response).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -86,7 +134,7 @@ pub async fn put<I: Serialize + ?Sized, O: DeserializeOwned>(
         .send()
         .await
         .map_err(|error| format!("请求失败：{error}"))?;
-    decode(response).await
+    decode(path, response).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -103,7 +151,7 @@ pub async fn delete<O: DeserializeOwned>(path: &str) -> Result<O, String> {
         .send()
         .await
         .map_err(|error| format!("请求失败：{error}"))?;
-    decode(response).await
+    decode(path, response).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -160,6 +208,10 @@ pub fn post_stream<I: Serialize + ?Sized>(
                 .await
                 .map_err(|error| format!("请求失败：{error}"))?;
             if !response.ok() {
+                // 研究流是最长的一条请求，也最容易横跨会话过期的那一刻。
+                if response.status() == 401 {
+                    notify_unauthorized();
+                }
                 return Err(format!("服务返回 {}", response.status()));
             }
             let stream = response.body().ok_or_else(|| "响应无正文流".to_string())?;
