@@ -29,6 +29,12 @@
   --paper-sunken: #edf3fa;
   --paper-inset: #e2eaf3;
 
+  /* 用户提问气泡专用面。不能沿用 --paper-sunken：它在浅色下距 --paper-canvas 只差
+     一档极浅的蓝（#edf3fa vs #f4f8fd），气泡形状肉眼看不出，而同一个组件在深色下
+     （#232326 vs #141416）却是清清楚楚的一只气泡——同一处交互在两个主题里是两种设计。
+     单列一个令牌，让"这句是我问的"在明暗两侧一样立得住。 */
+  --bubble-user: #e3ecf8;
+
   /* 三、四级墨色比苹果自己的（#6e6e73 / #86868b）各压深一档。苹果那两个值对
      #f5f5f7 只有 4.66:1 和 3.33:1，后者不过 WCAG AA——apple.com 上是这样，
      但我们的 11–13px 小字承载的是日期、股票代码、证据来源，是要读的信息不是氛围，
@@ -68,6 +74,9 @@
   /* ── 语义色：涨跌与风险专用，不与强调色混用 ───────────────────────── */
   --danger: #d70015;
   --danger-ink: #b3000f;
+  /* 破坏性按钮按下态。此前直接写死在 10-dialog.css 里，深色模式没有对应值——
+     深底上 hover 变亮、按下却掉进一团几乎看不见的暗红，"按下去"读起来像按没了。 */
+  --danger-active: #7a170f;
   --danger-tint: rgba(215, 0, 21, 0.08);
   /* 护栏硬失败时的卡片描边——红得足以被一眼看见，又不到警报色的程度。 */
   --danger-line: rgba(215, 0, 21, 0.22);
@@ -172,6 +181,12 @@
   --glass-sheen: inset 0 1px 0 rgba(255, 255, 255, 0.9);
   /* 滑块从轨道里"升起来"的那一层：升起感只需要一道极浅的投影 + 顶部高光。 */
   --glass-lift: 0 1px 2px rgba(0, 0, 0, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  /* 轨道里被选中的那一枚滑块的面，以及玻璃上悬停时浮起的那一层。
+     这两样此前是直接写死的 `rgba(255,255,255,.96)` / `.82`——深色下就是白底白字，
+     深色模式"没适配好"绝大部分就是这一类漏网的固定浅色。 */
+  --glass-thumb: rgba(255, 255, 255, 0.96);
+  --glass-hover: rgba(255, 255, 255, 0.82);
+  --glass-thumb-shadow: 0 3px 10px rgba(20, 62, 108, 0.10);
 }
 
 /* ============================================================================
@@ -199,6 +214,7 @@
     --paper-canvas: #141416;
     --paper-sunken: #232326;
     --paper-inset: #2c2c2f;
+    --bubble-user: #232326;
 
     --ink-1: #f5f5f7;
     --ink-2: #d2d2d7;
@@ -231,6 +247,8 @@
 
     --danger: #ff453a;
     --danger-ink: #ff6961;
+    /* 深色下按下态只比底色沉一档，仍然明确是红的。 */
+    --danger-active: #e03a30;
     --danger-tint: rgba(255, 69, 58, 0.16);
     --danger-line: rgba(255, 69, 58, 0.32);
     --warn: #ff9f0a;
@@ -251,6 +269,10 @@
     --glass-track: rgba(255, 255, 255, 0.08);
     --glass-sheen: inset 0 1px 0 rgba(255, 255, 255, 0.07);
     --glass-lift: 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    /* 深色下滑块不是"更白"，是"更亮一层的面"——照搬浅色的近白会在近黑上炸开。 */
+    --glass-thumb: rgba(255, 255, 255, 0.12);
+    --glass-hover: rgba(255, 255, 255, 0.07);
+    --glass-thumb-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
   }
 }
 
@@ -263,6 +285,7 @@
   --paper-canvas: #141416;
   --paper-sunken: #232326;
   --paper-inset: #2c2c2f;
+  --bubble-user: #232326;
 
   --ink-1: #f5f5f7;
   --ink-2: #d2d2d7;
@@ -295,6 +318,7 @@
 
   --danger: #ff453a;
   --danger-ink: #ff6961;
+  --danger-active: #e03a30;
   --danger-tint: rgba(255, 69, 58, 0.16);
   --danger-line: rgba(255, 69, 58, 0.32);
   --warn: #ff9f0a;
@@ -314,4 +338,8 @@
   --glass-track: rgba(255, 255, 255, 0.08);
   --glass-sheen: inset 0 1px 0 rgba(255, 255, 255, 0.07);
   --glass-lift: 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  /* 深色下滑块不是"更白"，是"更亮一层的面"——照搬浅色的近白会在近黑上炸开。 */
+  --glass-thumb: rgba(255, 255, 255, 0.12);
+  --glass-hover: rgba(255, 255, 255, 0.07);
+  --glass-thumb-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
 }

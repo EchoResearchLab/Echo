@@ -14,12 +14,13 @@
 use crate::api;
 use crate::dialog::confirm_destructive;
 use crate::format;
-use crate::icons::{EchoArt, EchoMark, Icon};
+use crate::icons::{EchoArt, Icon};
 use echo_contracts::{
     AnswerSource, AskRequest, AskResponse, CitationGuardView, CompanyHeaderView, CompareLegView,
     CompareResponse, Decimal, EarningsCalendarView, EvidenceView, GuardView, MutationResponse,
-    ResearchSessionDetail, ResearchSessionResponse, ResearchSessionsResponse, ResearchStreamEvent,
-    ResearchStreamStage, ResearchStreamStageName, RouteView, ValuationView,
+    ReportGenerateResponse, ResearchSessionDetail, ResearchSessionResponse,
+    ResearchSessionsResponse, ResearchStreamEvent, ResearchStreamStage, ResearchStreamStageName,
+    RouteView, ValuationView,
 };
 use leptos::*;
 
@@ -27,22 +28,26 @@ use leptos::*;
 /// 窗口内跑完，卡死比慢更值得暴露。
 const STREAM_TIMEOUT_MS: i32 = 120_000;
 
+#[cfg(target_arch = "wasm32")]
+fn now_ms() -> f64 {
+    js_sys::Date::now()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn now_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |duration| duration.as_secs_f64() * 1_000.0)
+}
+
 /// 一轮的终态或进行态。`Streaming` 里的字段随 SSE 事件逐步填充。
 #[derive(Clone)]
 enum TurnStatus {
     Streaming {
         stage: Option<ResearchStreamStage>,
-        stages: Vec<ResearchStreamStage>,
-        meta_route: Option<RouteView>,
-        meta_company: Option<CompanyHeaderView>,
-        meta_valuation: Option<ValuationView>,
-        meta_completeness: Option<u8>,
-        meta_sources: Vec<String>,
-        meta_earnings: Option<EarningsCalendarView>,
         delta_text: String,
-        guard: Option<GuardView>,
     },
-    Done(AskResponse),
+    Done(Box<AskResponse>),
     /// 对话内双主体对比完成——两腿独立取数/独立护栏；对比结果暂不落库。
     CompareDone(Box<CompareResponse>),
     /// 从历史会话加载的一轮——字段比 [`AskResponse`] 少（当时未持久化路由/完备度/护栏明细），
@@ -56,15 +61,7 @@ impl TurnStatus {
     fn streaming_default() -> Self {
         Self::Streaming {
             stage: None,
-            stages: Vec::new(),
-            meta_route: None,
-            meta_company: None,
-            meta_valuation: None,
-            meta_completeness: None,
-            meta_sources: Vec::new(),
-            meta_earnings: None,
             delta_text: String::new(),
-            guard: None,
         }
     }
 
@@ -108,6 +105,8 @@ struct Turn {
     question: StoredValue<String>,
     ticker: RwSignal<String>,
     status: RwSignal<TurnStatus>,
+    started_at_ms: RwSignal<f64>,
+    processed_seconds: RwSignal<Option<u64>>,
     /// 仍在流式进行时持有取消句柄；终态后清空，避免悬空取消一个已结束的请求。
     handle: StoredValue<Option<api::StreamHandle>>,
 }
@@ -119,6 +118,8 @@ impl Turn {
             question: store_value(question),
             ticker: create_rw_signal(ticker),
             status: create_rw_signal(status),
+            started_at_ms: create_rw_signal(now_ms()),
+            processed_seconds: create_rw_signal(None),
             handle: store_value(None),
         }
     }
@@ -133,6 +134,17 @@ impl Turn {
         }
         self.handle.set_value(None);
         self.status.set(TurnStatus::Cancelled);
+    }
+
+    fn restart_timer(&self) {
+        self.started_at_ms.set(now_ms());
+        self.processed_seconds.set(None);
+    }
+
+    fn finish_processing(&self) {
+        let elapsed_ms = (now_ms() - self.started_at_ms.get_untracked()).max(0.0);
+        self.processed_seconds
+            .set(Some(((elapsed_ms / 1_000.0).ceil() as u64).max(1)));
     }
 }
 
@@ -165,21 +177,6 @@ fn stage_activity(name: Option<ResearchStreamStageName>) -> &'static str {
         Some(ResearchStreamStageName::Assembling) => "正在整理已经核实的研究事实",
         Some(ResearchStreamStageName::Verifying) => "正在检查数字护栏与结论边界",
         Some(ResearchStreamStageName::Persisting) => "正在保存本轮研究上下文",
-    }
-}
-
-fn stage_short_label(name: ResearchStreamStageName) -> &'static str {
-    match name {
-        ResearchStreamStageName::Routing => "理解问题",
-        ResearchStreamStageName::Resolving => "确认主体",
-        ResearchStreamStageName::MarketFinancials => "核对财务",
-        ResearchStreamStageName::Evidence => "检索证据",
-        ResearchStreamStageName::Valuation => "估值框架",
-        ResearchStreamStageName::Generating => "综合作答",
-        ResearchStreamStageName::FactCheck => "事实核验",
-        ResearchStreamStageName::Assembling => "整理事实",
-        ResearchStreamStageName::Verifying => "数字护栏",
-        ResearchStreamStageName::Persisting => "保存会话",
     }
 }
 
@@ -241,7 +238,8 @@ fn attach_stream(
                     set_session_id.set(f.response.session_id.clone());
                 }
                 turn.handle.set_value(None);
-                turn.status.set(TurnStatus::Done(f.response));
+                turn.finish_processing();
+                turn.status.set(TurnStatus::Done(Box::new(f.response)));
                 on_persisted.call(());
                 on_activity.call(());
                 return;
@@ -253,6 +251,7 @@ fn attach_stream(
                     c.response.primary.ticker, c.response.peer.ticker
                 ));
                 turn.handle.set_value(None);
+                turn.finish_processing();
                 turn.status
                     .set(TurnStatus::CompareDone(Box::new(c.response)));
                 on_activity.call(());
@@ -266,51 +265,32 @@ fn attach_stream(
             }
             _ => {}
         }
-        turn.status.update(|status| {
-            let TurnStatus::Streaming {
-                stage,
-                stages,
-                meta_route,
-                meta_company,
-                meta_valuation,
-                meta_completeness,
-                meta_sources,
-                meta_earnings,
-                delta_text,
-                guard,
-            } = status
-            else {
-                return;
-            };
-            match event {
-                ResearchStreamEvent::Meta(m) => {
-                    // 服务端从问题里识别出的主体回填到本轮——气泡标签与后续追问都用它。
-                    if turn.ticker.get_untracked().is_empty() {
-                        turn.ticker.set(m.ticker);
-                    }
-                    *meta_route = Some(m.route);
-                    *meta_company = m.company;
-                    *meta_valuation = Some(m.valuation);
-                    *meta_completeness = Some(m.data_completeness);
-                    *meta_sources = m.connected_sources;
-                    *meta_earnings = m.earnings;
+        match event {
+            ResearchStreamEvent::Meta(m) => {
+                // 服务端识别出的主体只用于续接会话；思考界面只显示当前真实阶段。
+                if turn.ticker.get_untracked().is_empty() {
+                    turn.ticker.set(m.ticker);
                 }
-                ResearchStreamEvent::Stage(s) => {
-                    if !stages
-                        .iter()
-                        .any(|seen| seen.index == s.index && seen.name == s.name)
-                    {
-                        stages.push(s.clone());
-                    }
-                    *stage = Some(s);
-                }
-                ResearchStreamEvent::Delta(d) => delta_text.push_str(&d.text),
-                ResearchStreamEvent::Guard(g) => *guard = g.fact_guard,
-                ResearchStreamEvent::Final(_)
-                | ResearchStreamEvent::Compare(_)
-                | ResearchStreamEvent::Error(_) => unreachable!(),
             }
-        });
+            ResearchStreamEvent::Stage(next) => {
+                turn.status.update(|status| {
+                    if let TurnStatus::Streaming { stage, .. } = status {
+                        *stage = Some(next);
+                    }
+                });
+            }
+            ResearchStreamEvent::Delta(delta) => {
+                turn.status.update(|status| {
+                    if let TurnStatus::Streaming { delta_text, .. } = status {
+                        delta_text.push_str(&delta.text);
+                    }
+                });
+            }
+            ResearchStreamEvent::Guard(_) => {}
+            ResearchStreamEvent::Final(_)
+            | ResearchStreamEvent::Compare(_)
+            | ResearchStreamEvent::Error(_) => unreachable!(),
+        }
         // 流式 delta 只增长当前答案，不再每个 token 强制贴底。逐字滚动会让整张页面
         // 连续上移，用户看到的是抖动而不是流畅生成；终态与新消息仍会正常归位。
     };
@@ -343,6 +323,7 @@ fn restart_turn(
     on_activity: Callback<()>,
 ) {
     turn.handle.set_value(None);
+    turn.restart_timer();
     turn.status.set(TurnStatus::streaming_default());
     attach_stream(turn, session_id, set_session_id, on_persisted, on_activity);
 }
@@ -825,16 +806,14 @@ fn EvidencePanel(
     .into_view()
 }
 
-/// 流式进行中的卡片：直接展示服务端实际发来的研究阶段；只有文字高光移动，
-/// 容器与进度节点都保持静止，避免每个 token 重挂载时产生视觉抖动。
+/// 流式进行中只保留一行来自服务端的真实阶段文字，不再额外叠加框、进度或步骤胶囊。
 #[component]
 fn StreamingCard(turn: Turn) -> impl IntoView {
-    // 思考进度与正文拆成两个 memo：delta 到达时只更新答案文本，不重挂思考过程。
-    // 这样左到右的文字高光可以连续播放，头像、卡片和阶段轨迹也不会每个 token 闪一下。
-    let stage_state = create_memo(move |_| {
+    // 阶段与正文拆成两个 memo：delta 到达时只更新答案，不重挂思考文字。
+    let stage = create_memo(move |_| {
         turn.status.with(|status| match status {
-            TurnStatus::Streaming { stage, stages, .. } => (stage.clone(), stages.clone()),
-            _ => (None, Vec::new()),
+            TurnStatus::Streaming { stage, .. } => stage.clone(),
+            _ => None,
         })
     });
     let delta_text = create_memo(move |_| {
@@ -844,69 +823,36 @@ fn StreamingCard(turn: Turn) -> impl IntoView {
         })
     });
     view! {
-        <div class="answer-card">
-            <div class="answer-text-section">
-                <div class="thinking-process" aria-live="polite">
-                    <div class="thinking-process-head">
-                        <span class="thinking-live-dot" aria-hidden="true"></span>
-                        <span>
-                            <strong class="thinking-shimmer">{move || {
-                                let (stage, _) = stage_state.get();
-                                stage_activity(stage.as_ref().map(|item| item.name))
-                            }}</strong>
-                            <small>{move || {
-                                let (stage, _) = stage_state.get();
-                                stage
-                                    .filter(|item| item.index > 0 && item.total > 0)
-                                    .map(|item| {
-                                        format!("真实模型链路 · {}/{}", item.index, item.total)
-                                    })
-                                    .unwrap_or_else(|| "正在准备研究链路".to_string())
-                            }}</small>
-                        </span>
-                    </div>
-                    <div class="thinking-trail" aria-label="已执行的模型步骤">
-                        {move || {
-                            let (stage, stages) = stage_state.get();
-                            let active = stage.as_ref().map(|item| (item.index, item.name));
-                            if stages.is_empty() {
-                                view! {
-                                    <span class="thinking-step is-current">
-                                        <i aria-hidden="true"></i>
-                                        "理解问题"
-                                    </span>
-                                }.into_view()
-                            } else {
-                                stages
-                                    .into_iter()
-                                    .map(|item| {
-                                        let class = if Some((item.index, item.name)) == active {
-                                            "thinking-step is-current"
-                                        } else {
-                                            "thinking-step is-complete"
-                                        };
-                                        view! {
-                                            <span class=class>
-                                                <i aria-hidden="true"></i>
-                                                {stage_short_label(item.name)}
-                                            </span>
-                                        }
-                                    })
-                                    .collect_view()
-                                    .into_view()
-                            }
-                        }}
-                    </div>
-                </div>
-                {move || {
-                    let text = delta_text.get();
-                    (!text.is_empty()).then(|| {
-                        let html = crate::markdown::render(&text);
-                        view! { <div class="answer-text is-streaming" inner_html=html></div> }
-                    })
-                }}
-            </div>
+        <div class="streaming-response">
+            <p
+                class="thinking-line"
+                aria-live="polite"
+                aria-label=move || {
+                    let current = stage.get();
+                    stage_activity(current.as_ref().map(|item| item.name))
+                }
+            >
+                <strong class="thinking-shimmer">"正在思考"</strong>
+            </p>
+            {move || {
+                let text = delta_text.get();
+                (!text.is_empty()).then(|| {
+                    let html = crate::markdown::render(&text);
+                    view! { <div class="answer-text is-streaming" inner_html=html></div> }
+                })
+            }}
         </div>
+    }
+}
+
+#[component]
+fn ProcessedStatus(seconds: Option<u64>) -> impl IntoView {
+    view! {
+        <div class="processed-status">
+            <strong>"已处理"</strong>
+            {seconds.map(|value| view! { <span>{format!("{value}s")}</span> })}
+        </div>
+        <div class="processed-divider" aria-hidden="true"></div>
     }
 }
 
@@ -920,15 +866,31 @@ fn TurnBody(turn: Turn, on_retry: Callback<()>) -> impl IntoView {
             if streaming.get() {
                 view! { <StreamingCard turn=turn /> }.into_view()
             } else {
+                let seconds = turn.processed_seconds.get();
                 match turn.status.get() {
                     TurnStatus::Done(response) => view! {
-                        <DoneCard res=response on_regenerate=on_retry />
+                        <div class="processed-response">
+                            <ProcessedStatus seconds=seconds />
+                            <DoneCard
+                                res=*response
+                                question=turn.question.get_value()
+                                on_regenerate=on_retry
+                            />
+                        </div>
                     }.into_view(),
                     TurnStatus::CompareDone(response) => view! {
-                        <CompareCard res=*response on_regenerate=on_retry />
+                        <div class="processed-response">
+                            <ProcessedStatus seconds=seconds />
+                            <CompareCard res=*response on_regenerate=on_retry />
+                        </div>
                     }.into_view(),
                     TurnStatus::Archived(archived) => view! {
-                        <HistoryCard turn=*archived />
+                        <HistoryCard
+                            turn=*archived
+                            question=turn.question.get_value()
+                            ticker=turn.ticker.get_untracked()
+                            on_regenerate=on_retry
+                        />
                     }.into_view(),
                     TurnStatus::Failed(message) => view! {
                         <RetryableMessage
@@ -951,18 +913,47 @@ fn TurnBody(turn: Turn, on_retry: Callback<()>) -> impl IntoView {
     }
 }
 
-/// 答案上的动作条：复制原文、导出 Markdown、重新生成。
+/// 答案上的动作条：复制原文、导出 Markdown、生成深度报告、重新生成。
 ///
 /// 导出原来只挂在深度报告卡上；报告入口收掉后导出下沉到每一条答案——研究结论要能带走，
-/// 这个能力不该跟着一个按钮一起消失。
+/// 这个能力不该跟着一个按钮一起消失。深度报告则以动作的形式回到这里：它走的是
+/// `/api/report/generate`（报告专属提示词 + 固定结构 + 同一份护栏），产出的是一份可归档的
+/// Markdown，而不是对话里的又一段答案，所以直接落成文件而不占用对话流。
+///
+/// `question` 缺省时不出深度报告按钮——对比轮就是这种情况：报告服务是单主体口径，
+/// 硬给对比轮配一个报告按钮，点下去只会拿到其中一条腿的报告，比没有按钮更误导。
 #[component]
 fn AnswerActions(
     text: Option<String>,
     #[prop(into)] ticker: String,
+    question: Option<String>,
+    session_id: Option<String>,
     on_regenerate: Callback<()>,
 ) -> impl IntoView {
     let (copied, set_copied) = create_signal(false);
     let export = text.clone();
+    let report_ticker = ticker.clone();
+    let report_question = question.clone();
+    let report = create_action(move |(): &()| {
+        let req = AskRequest {
+            question: report_question.clone().unwrap_or_default(),
+            ticker: report_ticker.clone(),
+            session_id: session_id.clone(),
+            ..Default::default()
+        };
+        let filename = if report_ticker.trim().is_empty() {
+            "echo-深度报告.md".to_string()
+        } else {
+            format!("{}-深度报告.md", report_ticker.trim())
+        };
+        async move {
+            let response =
+                api::post::<_, ReportGenerateResponse>("/api/report/generate", &req).await?;
+            api::download_text_file(&filename, "text/markdown;charset=utf-8", &response.markdown);
+            Ok::<(), String>(())
+        }
+    });
+    let offers_report = question.is_some();
     view! {
         <div class="answer-actions">
             {text.map(|text| view! {
@@ -1000,6 +991,17 @@ fn AnswerActions(
                     ><Icon name="download" />"导出"</button>
                 }
             })}
+            {offers_report.then(|| view! {
+                <button
+                    class="answer-action"
+                    title="用同一个问题生成一份结构化深度报告并下载"
+                    disabled=move || report.pending().get()
+                    on:click=move |_| report.dispatch(())
+                >
+                    <Icon name="file" />
+                    {move || if report.pending().get() { "生成报告中…" } else { "深度报告" }}
+                </button>
+            })}
             <button
                 class="answer-action"
                 title="用同一个问题重新研究一次"
@@ -1007,13 +1009,21 @@ fn AnswerActions(
             >
                 <Icon name="refresh" />"重新生成"
             </button>
+            // 报告失败要说出来。静默失败会让用户以为"点了没反应"，然后一直点。
+            {move || report.value().get().and_then(Result::err).map(|error| view! {
+                <span class="answer-action-error" role="alert">{error}</span>
+            })}
         </div>
     }
 }
 
 /// 干净完成后的答案卡——答案文本优先，估值/完备度/来源/护栏全部收进折叠的证据面板。
 #[component]
-fn DoneCard(res: AskResponse, on_regenerate: Callback<()>) -> impl IntoView {
+fn DoneCard(
+    res: AskResponse,
+    #[prop(into)] question: String,
+    on_regenerate: Callback<()>,
+) -> impl IntoView {
     let answer_text = res.answer.clone();
     view! {
         <div class="answer-card">
@@ -1032,7 +1042,13 @@ fn DoneCard(res: AskResponse, on_regenerate: Callback<()>) -> impl IntoView {
                 }}
             </div>
 
-            <AnswerActions text=answer_text ticker=res.ticker.clone() on_regenerate=on_regenerate />
+            <AnswerActions
+                text=answer_text
+                ticker=res.ticker.clone()
+                question=Some(question)
+                session_id=res.session_id.clone()
+                on_regenerate=on_regenerate
+            />
 
             <FilingCards filings=res.filings.clone() />
 
@@ -1057,8 +1073,18 @@ fn DoneCard(res: AskResponse, on_regenerate: Callback<()>) -> impl IntoView {
 /// 服务端把整段多轮对话存在 `thread_json` 里，此前 UI 只渲染最后一条答案，前面几轮
 /// 问答虽然存着却永远看不到，等于把已落库的研究记录丢了一半。现在逐轮原样回放。
 /// 路由 chip、完备度、护栏明细当时未存，缺了就不画，不拿假数据充数。
+///
+/// 动作条与实时作答一视同仁。此前重开一条历史会话，复制、导出、深度报告、重新生成会
+/// **整条消失**——研究结论一旦落库反而带不走了，这跟"研究历史"的存在意义正好相反。
+/// `session_id` 传 `None`：深度报告按这一轮的问题与主体现取现做，不假装能复原当时的上下文。
 #[component]
-fn HistoryCard(turn: ArchivedTurn) -> impl IntoView {
+fn HistoryCard(
+    turn: ArchivedTurn,
+    #[prop(into)] question: String,
+    #[prop(into)] ticker: String,
+    on_regenerate: Callback<()>,
+) -> impl IntoView {
+    let answer_text = turn.answer.clone();
     view! {
         <div class="answer-card">
             {turn.created_at.map(|created| view! {
@@ -1078,6 +1104,14 @@ fn HistoryCard(turn: ArchivedTurn) -> impl IntoView {
                     }.into_view(),
                 }}
             </div>
+
+            <AnswerActions
+                text=answer_text
+                ticker=ticker
+                question=Some(question)
+                session_id=None
+                on_regenerate=on_regenerate
+            />
 
             {turn.evidence.map(|evidence| view! {
                 <EvidencePanel
@@ -1180,6 +1214,8 @@ fn CompareCard(res: CompareResponse, on_regenerate: Callback<()>) -> impl IntoVi
             <AnswerActions
                 text=answer_text
                 ticker=format!("{}-vs-{}", res.primary.ticker, res.peer.ticker)
+                question=None
+                session_id=None
                 on_regenerate=on_regenerate
             />
 
@@ -1238,6 +1274,16 @@ fn HistorySidebar(
     set_collapsed: WriteSignal<bool>,
 ) -> impl IntoView {
     view! {
+        // 窄屏展开时抽屉是覆盖在研究台之上的。没有遮罩，用户只能回到抽屉里那个 `<`
+        // 才关得掉——覆盖式抽屉点外面就该收起来。宽屏用 CSS 关掉这层（那里抽屉是
+        // 常驻栏，不覆盖任何东西）。
+        {move || (!collapsed.get()).then(|| view! {
+            <div
+                class="sidebar-scrim"
+                aria-hidden="true"
+                on:click=move |_| set_collapsed.set(true)
+            ></div>
+        })}
         <aside
             class=move || if collapsed.get() { "research-sidebar is-collapsed" } else { "research-sidebar" }
             aria-label="研究历史"
@@ -1263,7 +1309,10 @@ fn HistorySidebar(
                     None => crate::workspace::loading_view(),
                     Some(Err(error)) => crate::workspace::error_view(error),
                     Some(Ok(data)) if data.sessions.is_empty() => {
-                        crate::workspace::empty_view("还没有研究记录。")
+                        crate::workspace::empty_view(
+                            "还没有研究记录。",
+                            "在下方输入框问第一个问题，研究就会存到这里。",
+                        )
                     }
                     Some(Ok(data)) => {
                         let active_id = active_id.clone();
@@ -1663,35 +1712,14 @@ pub fn ResearchPage(
                                         );
                                     });
                                     view! {
-                                        // user bubble——问题为主体，研究对象作为小标签而不是拼接文本
+                                        // 对话保持最少结构：一句问题，不再叠加作者、代码标签或气泡框。
                                         <div class="message user">
-                                            <div class="user-message-stack">
-                                                <span class="message-author">"我的问题"</span>
-                                                <div class="bubble">
-                                                    {move || {
-                                                        let label = turn.ticker.get();
-                                                        (!label.is_empty()).then(|| view! {
-                                                            <span class="bubble-ticker">{label}</span>
-                                                        })
-                                                    }}
-                                                    <p class="bubble-text">{turn.question.get_value()}</p>
-                                                </div>
-                                            </div>
+                                            <p class="bubble-text">{turn.question.get_value()}</p>
                                         </div>
-                                        // assistant card
+                                        // 助手也不再套身份头和卡片；流式时就是一行真实思考文字。
                                         <div class="message assistant">
                                             <div class="assistant-message">
-                                                <div class="assistant-identity">
-                                                    <span class="assistant-avatar"><EchoMark /></span>
-                                                    <span>
-                                                        <strong>"ECHO"</strong>
-                                                        <small>"RESEARCH INTELLIGENCE"</small>
-                                                    </span>
-                                                    <i aria-hidden="true"></i>
-                                                </div>
-                                                <div class="bubble assistant-bubble">
-                                                    <TurnBody turn=turn on_retry=on_retry />
-                                                </div>
+                                                <TurnBody turn=turn on_retry=on_retry />
                                             </div>
                                         </div>
                                     }

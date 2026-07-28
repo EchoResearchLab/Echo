@@ -18,12 +18,13 @@ pub use migrations::{Migration, migrate, migration_checksum, migrations};
 pub use repositories::{
     AccountSubscriptionRow, AuthRepository, AuthSessionRow, CompanyProfileRepository,
     CompanyProfileRow, CompanyProfileSummaryRow, CompanyProfileUpsert, CompanySearchRow,
-    EarningsCandidateRow, NewNotification, NewUser, NewWatchRule, NotificationRow,
-    NotificationsRepository, OperationsRepository, PortfolioPositionRow, PortfolioRepository,
-    PortfolioSnapshotResult, PortfolioUpsert, PreferencesPatch, PreferencesRepository,
-    RateLimitRepository, ReminderProfileRow, ResearchSessionRepository, ResearchSessionRow,
-    ResearchSessionSummaryRow, SaveResearchSession, UserPreferencesRow, UserRow, WatchEntryRow,
-    WatchRuleDetailRow, WatchRuleRow, WatchRulesRepository, WatchlistRepository, normalize_ticker,
+    EarningsCandidateRow, FactGuardAuditEntry, FactGuardAuditRepository, FactGuardHardDetail,
+    NewNotification, NewUser, NewWatchRule, NotificationRow, NotificationsRepository,
+    OperationsRepository, PortfolioPositionRow, PortfolioRepository, PortfolioSnapshotResult,
+    PortfolioUpsert, PreferencesPatch, PreferencesRepository, RateLimitRepository,
+    ReminderProfileRow, ResearchSessionRepository, ResearchSessionRow, ResearchSessionSummaryRow,
+    SaveResearchSession, UserPreferencesRow, UserRow, WatchEntryRow, WatchRuleDetailRow,
+    WatchRuleRow, WatchRulesRepository, WatchlistRepository, normalize_ticker,
 };
 
 // 连接池类型对上层再导出，让 echo-api 等消费方不必直接钉 sqlx 版本（工作区单一事实源在此收口）。

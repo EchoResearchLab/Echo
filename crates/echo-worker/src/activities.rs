@@ -188,6 +188,7 @@ impl Activities {
         let date = Utc::now().date_naive();
         let mut saved = 0usize;
         let mut gaps = 0usize;
+        let mut cost_gaps = 0usize;
         for user_id in &users {
             let result = operations
                 .capture_portfolio_snapshot(user_id, date, hkd_usd)
@@ -195,13 +196,19 @@ impl Activities {
             if result.position_count == 0 {
                 continue;
             }
-            if result.missing_price == 0 && result.missing_fx == 0 {
+            if result.missing_price == 0 && result.missing_fx == 0 && result.missing_cost == 0 {
                 saved += 1;
+            } else if result.missing_price == 0 && result.missing_fx == 0 {
+                // 行情齐、只差用户没填成本价——这是可以让用户自己补上的缺口，
+                // 和取不到行情的系统性缺口分开报，否则运维看不出该找谁。
+                cost_gaps += 1;
             } else {
                 gaps += 1;
             }
         }
-        Ok(format!("组合快照={saved}，因缺价/汇率跳过={gaps}"))
+        Ok(format!(
+            "组合快照={saved}，因缺价/汇率跳过={gaps}，因未填成本价跳过={cost_gaps}"
+        ))
     }
 
     async fn check_falsifiers(&self) -> Result<String, ActivityError> {

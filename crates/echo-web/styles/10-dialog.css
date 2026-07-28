@@ -9,7 +9,7 @@
   z-index: 90;
   background: rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(2px);
-  animation: scrimIn var(--dur-2) linear both;
+  animation: scrimIn var(--dur-2) var(--ease-out) both;
 }
 
 @keyframes scrimIn {
@@ -72,5 +72,5 @@
 }
 
 .primary-button.is-danger:active:not(:disabled) {
-  background: #7a170f;
+  background: var(--danger-active);
 }

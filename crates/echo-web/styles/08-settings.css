@@ -114,7 +114,7 @@
   border: 1px solid var(--line-2);
   border-radius: var(--r-sm);
   background: var(--paper-raised);
-  transition: border-color var(--dur-1) linear, box-shadow var(--dur-1) linear;
+  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
 }
 
 .time-input-shell:focus-within {
@@ -188,14 +188,36 @@
   gap: var(--sp-4);
   padding: var(--sp-4) 0;
   border-top: 1px solid var(--line-1);
-  background: linear-gradient(
-    180deg,
-    rgba(245, 245, 247, 0) 0%,
-    var(--paper-canvas) 40%
-  );
+  /* 起点用 transparent 而不是写死的 rgba(245,245,247,0)：那是一个浅色专用值，
+     深色下这条渐变的起点就不是本主题的画布色了。 */
+  background: linear-gradient(180deg, transparent 0%, var(--paper-canvas) 40%);
 }
 
 .settings-actions > div:first-child {
   flex: 1;
   min-width: 0;
+}
+
+/* ── 邀请码（仅 owner） ─────────────────────────────────────────────── */
+.invite-code {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--paper-sunken);
+}
+
+/* 邀请码要被人一个字符一个字符抄下来：等宽 + 拉开字距，把 0/O、1/l 分清楚。 */
+.invite-code code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-1);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: var(--fs-13);
+  letter-spacing: 0.06em;
+  user-select: all;
 }

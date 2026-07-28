@@ -23,7 +23,7 @@
     background-color var(--dur-1) var(--ease-in-out),
     box-shadow var(--dur-2) var(--ease-out),
     transform var(--dur-1) var(--ease-out),
-    opacity var(--dur-1) linear;
+    opacity var(--dur-1) var(--ease-out);
 }
 
 .primary-button:hover:not(:disabled) {
@@ -66,16 +66,16 @@
   border-radius: var(--r-sm);
   background: var(--paper-raised);
   transition:
-    color var(--dur-1) linear,
-    border-color var(--dur-1) linear,
-    background-color var(--dur-1) linear;
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out);
 }
 
 .outline-button span {
   color: var(--ink-4);
   font-size: var(--fs-15);
   line-height: 1;
-  transition: color var(--dur-1) linear;
+  transition: color var(--dur-1) var(--ease-out);
 }
 
 .outline-button:hover:not(:disabled) {
@@ -115,7 +115,7 @@
   color: var(--ink-3);
   font-size: var(--fs-13);
   border-radius: var(--r-xs);
-  transition: color var(--dur-1) linear, background-color var(--dur-1) linear;
+  transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
 }
 
 .danger-link svg {
@@ -187,6 +187,68 @@
   grid-column: span 2;
 }
 
+/* ── 代码输入框的公司补全 ───────────────────────────────────────────── */
+.ticker-search {
+  position: relative;
+  min-width: 0;
+}
+
+/* 建议菜单浮在表单之上：参与文档流会把下面的字段一起顶下去，
+   用户每敲一个字符整张表单就跳一次。 */
+.ticker-search-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  right: 0;
+  max-height: 264px;
+  overflow-y: auto;
+  padding: var(--sp-1);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--paper-raised);
+  box-shadow: 0 14px 34px -20px rgba(23, 70, 120, 0.42);
+}
+
+.ticker-search-option {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+  border-radius: var(--r-xs);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+
+.ticker-search-option:hover,
+.ticker-search-option:focus-visible {
+  background: var(--paper-sunken);
+}
+
+.ticker-search-option strong {
+  color: var(--ink-1);
+  font-size: var(--fs-13);
+  font-variant-numeric: tabular-nums;
+}
+
+.ticker-search-option span {
+  color: var(--ink-2);
+  font-size: var(--fs-13);
+  /* 名字长就截断，代码永远不被挤走——代码才是用户要选中的那个东西。 */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ticker-search-option small {
+  margin-left: auto;
+  padding-left: var(--sp-2);
+  color: var(--ink-4);
+  font-size: var(--fs-11);
+  white-space: nowrap;
+}
+
 /* 用 `:where()` 把排除条件的特异性归零——否则 `input:not():not()` 是 (0,2,1)，
    会压过 `.watch-form-grid input` 这类单类名的组件规则，页面层就得靠 !important 反抗。 */
 input:where(:not([type="checkbox"]):not([type="radio"])),
@@ -201,9 +263,9 @@ select {
   border-radius: var(--r-sm);
   background: var(--paper-raised);
   transition:
-    border-color var(--dur-1) linear,
-    box-shadow var(--dur-1) linear,
-    background-color var(--dur-1) linear;
+    border-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out);
 }
 
 textarea {
@@ -543,7 +605,7 @@ input[type="checkbox"][role="switch"]:active::after {
   align-items: center;
   padding: var(--sp-4) var(--sp-5);
   border-top: 1px solid var(--line-1);
-  transition: background-color var(--dur-1) linear;
+  transition: background-color var(--dur-1) var(--ease-out);
 }
 
 .data-table > div:first-child {
@@ -668,4 +730,42 @@ input[type="checkbox"][role="switch"]:active::after {
 
 .notice.is-read > i {
   background: var(--line-2);
+}
+
+/* ── 按压反馈 ───────────────────────────────────────────────────────────
+   控件缺的不是颜色，是"被按下"这一下。只有 hover 变色、没有 active 位移时，
+   点击像是点在一张贴纸上——按下去什么都没发生，松手内容才换。这里给所有
+   常用控件补上统一的一下轻微下沉；位移只有 1px 上下，够手感、不晃版。
+
+   全局 `prefers-reduced-motion` 块已经把 transition 压到 0.001ms，
+   所以这里不必再写一份关闭规则。 */
+.nav-item,
+.segmented-item,
+.answer-action,
+.session-item-main,
+.composer-suggestions button,
+.ticker-search-option,
+.settings-card button:not(.primary-button),
+.outline-button,
+.danger-link {
+  transition-property: color, background-color, border-color, box-shadow, transform;
+  transition-duration: var(--dur-1);
+  transition-timing-function: var(--ease-out);
+}
+
+.nav-item:active:not(:disabled),
+.segmented-item:active:not(:disabled),
+.answer-action:active:not(:disabled),
+.session-item-main:active,
+.composer-suggestions button:active:not(:disabled),
+.ticker-search-option:active,
+.outline-button:active:not(:disabled),
+.danger-link:active:not(:disabled) {
+  transform: scale(0.975);
+}
+
+/* 已经是选中态的分段项按下去不缩——它不接受点击，缩一下等于骗用户有反应。 */
+.nav-item.is-active:active,
+.segmented-item.is-active:active {
+  transform: none;
 }

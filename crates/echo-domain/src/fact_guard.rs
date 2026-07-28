@@ -84,20 +84,6 @@ const AMOUNT_KEYWORDS: &[&str] = &[
     "止盈",
 ];
 
-/// compactNumber() 输出（"3.92 万亿" / "2099.21 亿"）反解析成原始数值。
-#[must_use]
-pub fn parse_compact_amount(s: &str) -> Option<Decimal> {
-    static RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^(-?\d+(?:\.\d+)?)\s*(万亿|亿|万)?$").unwrap());
-    let s = s.trim();
-    let caps = RE.captures(s).ok().flatten()?;
-    let n: Decimal = caps.get(1)?.as_str().parse().ok()?;
-    match caps.get(2).map(|m| m.as_str()) {
-        Some(unit) => cn_unit(unit).map(|u| n * u),
-        None => Some(n),
-    }
-}
-
 /// 展示级近似汇率换算（跟 CNY→HKD=1.08、HKD/USD≈1/7.8 同一套常量）。
 #[must_use]
 pub fn convert_currency(value: Decimal, from: &str, to: &str) -> Option<Decimal> {
@@ -858,6 +844,165 @@ fn match_in_bucket(value: Decimal, bucket: &[Fact], tol: &Tol) -> MatchResult {
     }
 }
 
+/// 正文里点名口径的说法 → 登记表标签里必然出现的关键词。
+///
+/// 只收**同维度里彼此容易互串**的口径：毛利率/经营利润率/净利率是同一张利润表上三个
+/// 逐级收窄的比率，PE/PB 是同一只票上两个不同分母的倍数——模型串的就是这些，而不是把
+/// 股息率写成 ROE。
+const METRIC_HINTS: &[(&str, &str)] = &[
+    ("毛利率", "毛利率"),
+    ("净利润率", "净利率"),
+    ("净利率", "净利率"),
+    ("经营利润率", "经营利润率"),
+    ("营业利润率", "经营利润率"),
+    ("营运利润率", "经营利润率"),
+    ("股息率", "股息率"),
+    ("净资产收益率", "ROE"),
+    ("ROE", "ROE"),
+    ("总资产收益率", "ROA"),
+    ("ROA", "ROA"),
+    ("收入增速", "收入增速"),
+    ("营收增速", "收入增速"),
+    ("收入增长", "收入增速"),
+    ("营收增长", "收入增速"),
+    ("收入同比", "收入增速"),
+    ("营收同比", "收入增速"),
+    ("利润增速", "利润增速"),
+    ("利润增长", "利润增速"),
+    ("利润同比", "利润增速"),
+    ("市盈率", "PE"),
+    ("PE", "PE"),
+    ("市净率", "PB"),
+    ("PB", "PB"),
+];
+
+/// 窗口里出现这些词，说明该数字讲的不是"本公司当期的这条口径"——要么换了时间
+/// （历史值、对比值），要么换了主体（同业、行业、竞品）。登记表只登本公司当期，
+/// 拿"它对不上当期"当错，就会把「毛利率从 40% 提升到 45%」里的 40%、
+/// 「同业净利率约 45%」整句判死。宁可退回原逻辑漏报，也不误报。
+const SCOPE_SHIFT_MARKERS: &[&str] = &[
+    // 换时间
+    "从",
+    "去年",
+    "上年",
+    "同期",
+    "此前",
+    "曾",
+    "上季",
+    "前值",
+    "历史上",
+    "当年",
+    // 换主体
+    "同业",
+    "行业",
+    "对手",
+    "竞品",
+    "可比",
+    "板块",
+    "平均",
+    "中位",
+];
+
+/// 往前看多少字符找口径词。太短接不住「毛利率（不含内容成本）45%」，太长会跨过整句。
+const HINT_WINDOW_CHARS: usize = 14;
+
+/// 找出这个数字**被正文点名**的口径。找不到返回 `None`，此时回退成原来的按桶匹配。
+fn metric_hint(text: &str, index: usize) -> Option<&'static str> {
+    let before = chars_before(text, index, HINT_WINDOW_CHARS);
+    // 句号之外的口径词属于上一句，与这个数字无关。
+    let window = before
+        .rsplit(['。', '！', '？', '\n', '；', ';'])
+        .next()
+        .unwrap_or(&before)
+        .to_uppercase();
+
+    let mut best: Option<(usize, &'static str)> = None;
+    for (surface, label) in METRIC_HINTS {
+        let Some(at) = window.rfind(surface) else {
+            continue;
+        };
+        // "PEG"/"PBR" 不是 PE/PB——ASCII 口径词后面还跟着字母就不算命中。
+        if surface.is_ascii()
+            && window[at + surface.len()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric())
+        {
+            continue;
+        }
+        // 离数字最近的那个口径才是它的口径（"毛利率 45%、净利率 25%" 里 25% 归净利率）。
+        if best.is_none_or(|(prev, _)| at > prev) {
+            best = Some((at, label));
+        }
+    }
+
+    let (_, label) = best?;
+    // 整个窗口都要看，不能只看口径词之后：「去年毛利率 40%」的时间词、「同业净利率 45%」的
+    // 主语，都出现在口径词**之前**。
+    if SCOPE_SHIFT_MARKERS
+        .iter()
+        .any(|marker| window.contains(marker))
+    {
+        return None;
+    }
+    Some(label)
+}
+
+/// 带口径的桶内匹配。
+///
+/// 原来的 [`match_in_bucket`] 只问"这个数字是不是桶里**某条**事实"——于是「净利率 45%」
+/// 在毛利率恰好是 45% 时照样 Pass，护栏对口径错误完全无感（这是它长期的头号盲区：
+/// 数字个个都对，说法全错）。这里先按正文点名的口径缩小到同名事实；数字对不上同名事实、
+/// 却正好等于另一条口径的真值时，判 **hard**——那不是"没核到"，是把 A 的数说成了 B 的。
+///
+/// 其余情况一律退回原逻辑，不新增任何误报面。
+fn match_in_bucket_with_metric(
+    value: Decimal,
+    bucket: &[Fact],
+    tol: &Tol,
+    metric: Option<&str>,
+) -> MatchResult {
+    let Some(metric) = metric else {
+        return match_in_bucket(value, bucket, tol);
+    };
+    let within = |fact: &Fact| abs(value - fact.value) <= tol.abs.max(abs(fact.value) * tol.rel);
+    // 标签用包含而不是相等：口径 PE 要能认下"历史PE p25"这类同口径的衍生事实，
+    // 否则引用历史分位会被自己判成错配。
+    let mut named = bucket
+        .iter()
+        .filter(|fact| fact.label.contains(metric))
+        .peekable();
+    if named.peek().is_none() {
+        return match_in_bucket(value, bucket, tol);
+    }
+    if let Some(fact) = named.clone().find(|fact| within(fact)) {
+        return MatchResult {
+            verdict: Verdict::Pass,
+            fact: Some((fact.label.clone(), fact.value)),
+            reason: None,
+        };
+    }
+    if let Some(other) = bucket
+        .iter()
+        .find(|fact| !fact.label.contains(metric) && within(fact))
+    {
+        let registered = named
+            .map(|fact| format!("{}={}", fact.label, fact.value.normalize()))
+            .collect::<Vec<_>>()
+            .join("、");
+        return MatchResult {
+            verdict: Verdict::Hard,
+            fact: Some((other.label.clone(), other.value)),
+            reason: Some(format!(
+                "口径错配：文中称是{metric}（登记为 {registered}），但这个数字是\"{}\"={}",
+                other.label,
+                other.value.normalize()
+            )),
+        };
+    }
+    match_in_bucket(value, bucket, tol)
+}
+
 fn percent_tol() -> Tol {
     Tol {
         rel: dec!(0),
@@ -1063,13 +1208,23 @@ pub fn verify_answer_numbers(text: &str, reg: &FactsRegistry) -> VerifyReport {
             }
         }
         let (dimension, result) = match &cand {
-            Candidate::Percent { value, .. } => (
+            Candidate::Percent { value, index, .. } => (
                 "percent",
-                match_in_bucket(*value, &reg.percents, &percent_tol()),
+                match_in_bucket_with_metric(
+                    *value,
+                    &reg.percents,
+                    &percent_tol(),
+                    metric_hint(scan_text, *index),
+                ),
             ),
-            Candidate::Multiple { value, .. } => (
+            Candidate::Multiple { value, index, .. } => (
                 "multiple",
-                match_in_bucket(*value, &reg.multiples, &multiple_tol()),
+                match_in_bucket_with_metric(
+                    *value,
+                    &reg.multiples,
+                    &multiple_tol(),
+                    metric_hint(scan_text, *index),
+                ),
             ),
             Candidate::Amount {
                 value, currency, ..
@@ -1360,6 +1515,127 @@ mod tests {
         let r = verify_answer_numbers("净利率 30.4%，本季稳健。", &reg);
         assert_eq!(r.hard_count, 0);
         assert_eq!(r.pass_count(), 1);
+    }
+
+    fn margins_registry() -> FactsRegistry {
+        let fin = Financials {
+            provider_ok: true,
+            currency: Some("CNY".into()),
+            gross_margin: Some(dec!(45.0)),
+            operating_margin: Some(dec!(33.0)),
+            net_margin: Some(dec!(25.0)),
+            pe: Some(dec!(30.0)),
+            pb: Some(dec!(3.0)),
+            ..Default::default()
+        };
+        build_facts_registry(&RegistrySources {
+            ticker: "X",
+            financials: Some(&fin),
+            ..Default::default()
+        })
+    }
+
+    /// 护栏长期的头号盲区：数字个个都对，说法全错。毛利率 45%、净利率 25% 同时登记时，
+    /// 「净利率 45%」在旧逻辑里照样 Pass——因为 45 确实是桶里某条事实。
+    #[test]
+    fn number_attached_to_the_wrong_metric_is_hard() {
+        let reg = margins_registry();
+        let report = verify_answer_numbers("公司盈利能力突出，净利率 45%。", &reg);
+        assert_eq!(
+            report.hard_count, 1,
+            "把毛利率的数说成净利率必须判死: {report:?}"
+        );
+        let reason = report.checked[0].reason.as_deref().expect("需给出原因");
+        assert!(
+            reason.contains("口径错配"),
+            "原因要说清是口径问题: {reason}"
+        );
+        assert!(
+            reason.contains("毛利率"),
+            "要指出这个数字实际属于谁: {reason}"
+        );
+    }
+
+    /// 同一维度里错配的另一种常见形态：PE 与 PB 互串。
+    #[test]
+    fn pe_number_quoted_as_pb_is_hard() {
+        let reg = margins_registry();
+        let report = verify_answer_numbers("估值不便宜，市净率 30x。", &reg);
+        assert_eq!(report.hard_count, 1, "PE 的数说成 PB 必须判死: {report:?}");
+    }
+
+    /// 口径命中的是**离数字最近**的那个词，否则一句话里连着说两个比率就会互相污染。
+    #[test]
+    fn nearest_metric_wins_within_one_sentence() {
+        let reg = margins_registry();
+        let report = verify_answer_numbers("毛利率 45%、净利率 25%，结构健康。", &reg);
+        assert_eq!(report.hard_count, 0, "两个都是如实引用: {report:?}");
+        assert_eq!(report.pass_count(), 2);
+    }
+
+    /// 防误报闸：登记表只登当期值，「毛利率从 25% 提升到 45%」里的 25% 是历史值，
+    /// 不能因为它恰好等于当期净利率就判成口径错配。
+    #[test]
+    fn historical_wording_is_not_a_caliber_mismatch() {
+        let reg = margins_registry();
+        let report = verify_answer_numbers("毛利率从 25% 提升到 45%。", &reg);
+        assert_eq!(report.hard_count, 0, "历史值不得判死: {report:?}");
+    }
+
+    /// 换了主体就不是本公司的口径。「同业净利率约 45%」讲的是别人，拿本公司净利率去核
+    /// 会把一句正常的对比判死——这是口径闸最容易伤到的一类正常表达。
+    #[test]
+    fn peer_subject_is_not_a_caliber_mismatch() {
+        let reg = margins_registry();
+        let report = verify_answer_numbers("同业净利率约 45%，公司仍有差距。", &reg);
+        assert_eq!(
+            report.hard_count, 0,
+            "讲同业不得按本公司口径判死: {report:?}"
+        );
+    }
+
+    /// 换了时间同理，且时间词常出现在口径词**之前**——窗口必须整段看。
+    #[test]
+    fn past_period_before_the_metric_word_is_not_a_mismatch() {
+        let reg = margins_registry();
+        let report = verify_answer_numbers("去年毛利率 25%，今年已明显改善。", &reg);
+        assert_eq!(report.hard_count, 0, "历史期值不得判死: {report:?}");
+    }
+
+    /// 同口径的衍生事实必须认下：说「PE 中位 31.7x」时，当期 PE 是 43.93 并不构成错配。
+    #[test]
+    fn same_caliber_derived_facts_still_pass() {
+        let fin = Financials {
+            provider_ok: true,
+            pe: Some(dec!(43.93)),
+            historical_valuation: Some(HistoricalValuation {
+                median: Some(dec!(31.70)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let reg = build_facts_registry(&RegistrySources {
+            ticker: "AAPL",
+            financials: Some(&fin),
+            ..Default::default()
+        });
+        let report = verify_answer_numbers("PE 中位 31.7x。", &reg);
+        assert_eq!(
+            report.hard_count, 0,
+            "历史 PE 与当期 PE 是同一口径: {report:?}"
+        );
+        assert_eq!(report.pass_count(), 1);
+    }
+
+    /// 登记表里根本没有这条口径时，一切照旧走原来的按桶匹配——新逻辑不许扩大误报面。
+    #[test]
+    fn unregistered_metric_falls_back_to_bucket_matching() {
+        let reg = margins_registry();
+        let report = verify_answer_numbers("股息率 45%。", &reg);
+        assert_eq!(
+            report.hard_count, 0,
+            "股息率未登记，不该凭空判死: {report:?}"
+        );
     }
 
     #[test]

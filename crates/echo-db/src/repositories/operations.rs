@@ -33,6 +33,8 @@ pub struct PortfolioSnapshotResult {
     pub position_count: i32,
     pub missing_price: i32,
     pub missing_fx: i32,
+    /// 未填成本价的持仓数。成本缺失时成本与盈亏都是断口，不是 0。
+    pub missing_cost: i32,
     pub total_value_usd: Option<Decimal>,
     pub total_cost_usd: Option<Decimal>,
     pub total_pnl_usd: Option<Decimal>,
@@ -43,6 +45,7 @@ struct PortfolioSummaryRow {
     position_count: i32,
     missing_price: i32,
     missing_fx: i32,
+    missing_cost: i32,
     total_value_usd: Option<Decimal>,
     total_cost_usd: Option<Decimal>,
     total_pnl_usd: Option<Decimal>,
@@ -229,24 +232,35 @@ impl<'a> OperationsRepository<'a> {
              ) SELECT count(*)::int AS position_count, \
                       count(*) FILTER (WHERE price IS NULL)::int AS missing_price, \
                       count(*) FILTER (WHERE fx IS NULL)::int AS missing_fx, \
+                      count(*) FILTER (WHERE avg_cost IS NULL)::int AS missing_cost, \
                       sum(price * shares * fx) AS total_value_usd, \
-                      sum(coalesce(avg_cost, 0) * shares * fx) AS total_cost_usd, \
-                      sum((price - coalesce(avg_cost, 0)) * shares * fx) AS total_pnl_usd \
+                      sum(avg_cost * shares * fx) AS total_cost_usd, \
+                      sum((price - avg_cost) * shares * fx) AS total_pnl_usd \
                FROM priced",
         )
         .bind(user_id)
         .bind(hkd_usd)
         .fetch_one(&mut *tx)
         .await?;
+        // 成本缺一条，整组的成本与盈亏就都不成立：SUM 会静默跳过 NULL 行，留下一个
+        // 少算了几笔成本的"总成本"，比缺口更危险。这里显式抹成断口（红线 2）。
+        let cost_grounded = summary.missing_cost == 0;
         let result = PortfolioSnapshotResult {
             position_count: summary.position_count,
             missing_price: summary.missing_price,
             missing_fx: summary.missing_fx,
+            missing_cost: summary.missing_cost,
             total_value_usd: summary.total_value_usd,
-            total_cost_usd: summary.total_cost_usd,
-            total_pnl_usd: summary.total_pnl_usd,
+            total_cost_usd: cost_grounded.then_some(summary.total_cost_usd).flatten(),
+            total_pnl_usd: cost_grounded.then_some(summary.total_pnl_usd).flatten(),
         };
-        if result.position_count > 0 && result.missing_price == 0 && result.missing_fx == 0 {
+        // 快照是历史盈亏曲线的唯一底账：缺价、缺汇率或缺成本任一成立都不落库，
+        // 宁可这一天没有点，也不能写一条把未填成本当 0 的虚高盈亏。
+        if result.position_count > 0
+            && result.missing_price == 0
+            && result.missing_fx == 0
+            && result.missing_cost == 0
+        {
             sqlx::query(
                 "INSERT INTO portfolio_snapshots \
                  (user_id, valid_time, total_value_usd, total_cost_usd, total_pnl_usd, position_count, knowledge_time) \

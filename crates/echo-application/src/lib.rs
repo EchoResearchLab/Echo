@@ -9,7 +9,6 @@
 use echo_domain::{
     Company, Filing, Financials, MarketSnapshot, PeerAnchor, Valuation, display_valuation,
 };
-use rust_decimal::Decimal;
 
 pub mod answer_prompt;
 pub mod auth;
@@ -35,9 +34,9 @@ pub use model_gateway::{
 };
 pub use report::{ReportOutcome, ReportService};
 pub use research::{
-    CompareResearchFacts, FactRecovery, FactRecoveryRequest, LoadedFundamentals,
-    PersistResearchSession, PriorTurn, ResearchFacts, ResearchOutcome, ResearchPorts,
-    ResearchService,
+    CompareResearchFacts, FactRecovery, FactRecoveryRequest, GuardAuditRecord, GuardOutcome,
+    LoadedFundamentals, PersistResearchSession, PriorTurn, ResearchFacts, ResearchOutcome,
+    ResearchPorts, ResearchService,
 };
 pub use research_memory::{CompanyMemory, CompanyMemoryUpdate};
 pub use research_orchestrator::{
@@ -106,14 +105,4 @@ pub fn build_panel(
         connected_sources: connected,
         data_completeness: completeness,
     }
-}
-
-/// 仓位盈亏用 Rust 定点内核算（红线 4：展示边界之外不得二进制浮点）。
-#[must_use]
-pub fn position_return_pct(price: Decimal, avg_cost: Decimal) -> Option<Decimal> {
-    use echo_finance_core::{Currency, Money, ratio, subtract};
-    let price = Money::new(price, Currency::Usd);
-    let cost = Money::new(avg_cost, Currency::Usd);
-    let gain = subtract(price, cost).ok()?;
-    ratio(gain, cost).ok().flatten()
 }

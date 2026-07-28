@@ -1,9 +1,11 @@
 mod auth;
+mod fact_guard;
 mod operations;
 mod rate_limit;
 mod workspace;
 
 pub use auth::{AccountSubscriptionRow, AuthRepository, AuthSessionRow, NewUser, UserRow};
+pub use fact_guard::{FactGuardAuditEntry, FactGuardAuditRepository, FactGuardHardDetail};
 pub use operations::{
     EarningsCandidateRow, OperationsRepository, PortfolioSnapshotResult, ReminderProfileRow,
     WatchRuleRow,

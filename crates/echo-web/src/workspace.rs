@@ -1,12 +1,14 @@
+use crate::company_search::TickerSearchInput;
 use crate::dialog::confirm_destructive;
 use crate::format;
 use crate::icons::{EchoArt, EchoMark, Icon};
 use crate::{api, profiles::ProfilesSection, research::ResearchPage};
 use echo_contracts::{
-    AccountResponse, AuthLoginRequest, AuthLogoutResponse, AuthRegisterRequest, AuthUserResponse,
-    ChangedCountResponse, Decimal, DeskResponse, MutationResponse, NotificationReadRequest,
-    NotificationsListResponse, PortfolioListResponse, PortfolioUpsertRequest, PreferencesResponse,
-    PreferencesUpdateRequest, PublicUser, UnreadResponse, WatchListResponse, WatchMutationRequest,
+    AccountResponse, AuthInviteRequest, AuthInviteResponse, AuthLoginRequest, AuthLogoutResponse,
+    AuthRegisterRequest, AuthUserResponse, ChangedCountResponse, CompanySearchItem, Decimal,
+    DeskResponse, MutationResponse, NotificationReadRequest, NotificationsListResponse,
+    PortfolioListResponse, PortfolioUpsertRequest, PreferencesResponse, PreferencesUpdateRequest,
+    PublicUser, UnreadResponse, UserRole, WatchListResponse, WatchMutationRequest,
     WatchRuleCreateRequest,
 };
 use leptos::*;
@@ -395,7 +397,7 @@ pub fn Workspace(user: PublicUser, on_auth_changed: Callback<()>) -> impl IntoVi
                             on_research=on_research_ticker
                         />
                     }.into_view(),
-                    Page::Settings => view! { <SettingsPage /> }.into_view(),
+                    Page::Settings => view! { <SettingsPage role=user.role /> }.into_view(),
                 }}
             </section>
         </div>
@@ -724,7 +726,10 @@ fn NotificationsPanel() -> impl IntoView {
                     {move || match notifications.get() {
                         None => loading_view(),
                         Some(Err(error)) => error_view(error),
-                        Some(Ok(data)) if data.notifications.is_empty() => empty_view("暂无通知"),
+                        Some(Ok(data)) if data.notifications.is_empty() => empty_view(
+                            "暂无通知",
+                            "监控规则触发或研究有新结论时，通知会自动送到这里。",
+                        ),
                         Some(Ok(data)) => data.notifications.into_iter().map(|item| view! {
                             <article class=if item.read_at.is_some() { "notice is-read" } else { "notice" }>
                                 <i aria-hidden="true"></i>
@@ -858,11 +863,17 @@ fn WatchSection(on_research: Callback<String>) -> impl IntoView {
                     <div class="form-grid watch-form-grid">
                         <label class="form-field">
                             <span>"股票代码"</span>
-                            <input
-                                placeholder="输入代码，如 0700.HK"
-                                prop:value=ticker
-                                on:input=move |event| set_ticker.set(event_target_value(&event).to_uppercase())
-                                on:keydown=move |event| if event.key() == "Enter" { submit() }
+                            <TickerSearchInput
+                                value=ticker
+                                set_value=set_ticker
+                                placeholder="输入代码或公司名，如 0700.HK / 腾讯"
+                                on_pick=Callback::new(move |item: CompanySearchItem| {
+                                    // 选中建议时顺手补上公司名，省得用户再打一遍已知的东西。
+                                    if company_name.get_untracked().trim().is_empty() {
+                                        set_company_name.set(item.name_zh);
+                                    }
+                                })
+                                on_submit=Callback::new(move |()| submit())
                             />
                         </label>
                         <label class="form-field">
@@ -891,7 +902,7 @@ fn WatchSection(on_research: Callback<String>) -> impl IntoView {
                     Some(Err(error)) => error_view(error),
                     Some(Ok(data)) => {
                         let visible: Vec<_> = data.entries.into_iter().filter(|entry| entry.mode == "add").collect();
-                        if visible.is_empty() { empty_view("还没有自选公司。") } else { view! {
+                        if visible.is_empty() { empty_view("还没有自选公司。", "在上方填入代码或公司名即可加入自选。") } else { view! {
                             <div class="watch-table data-table">
                                 <div class="watch-table-row data-table-head">
                                     <span>"公司"</span><span>"代码"</span><span>"标签 / 状态"</span><span>"最近关注"</span><span>"操作"</span>
@@ -1072,7 +1083,11 @@ fn RulesDeskSection() -> impl IntoView {
                     <div class="form-grid rule-form-grid">
                         <label class="form-field">
                             <span>"股票代码"</span>
-                            <input placeholder="AAPL" prop:value=rule_ticker on:input=move |event| set_rule_ticker.set(event_target_value(&event).to_uppercase()) />
+                            <TickerSearchInput
+                                value=rule_ticker
+                                set_value=set_rule_ticker
+                                placeholder="AAPL / 苹果"
+                            />
                         </label>
                         <label class="form-field form-field-wide">
                             <span>"触发条件"</span>
@@ -1121,11 +1136,17 @@ fn RulesDeskSection() -> impl IntoView {
             {move || match desk.get() {
                 None => loading_view(),
                 Some(Err(error)) => error_view(error),
-                Some(Ok(data)) if data.tickers.is_empty() => empty_view("还没有跟踪任何公司。"),
+                Some(Ok(data)) if data.tickers.is_empty() => empty_view(
+                    "还没有跟踪任何公司。",
+                    "先在「自选与监控」里关注一家公司。",
+                ),
                 Some(Ok(data)) => {
                     let rules: Vec<_> = data.tickers.into_iter().flat_map(|item| item.rules).collect();
                     if rules.is_empty() {
-                        empty_view("已关注公司尚未设置监控规则。")
+                        empty_view(
+                            "已关注公司尚未设置监控规则。",
+                            "用右上角的「新建规则」为它设定触发条件。",
+                        )
                     } else {
                         let tracked_tickers: Vec<String> = tracked
                             .get()
@@ -1193,7 +1214,10 @@ fn RulesDeskSection() -> impl IntoView {
                     {move || match desk.get() {
                         None => loading_view(),
                         Some(Err(error)) => error_view(error),
-                        Some(Ok(data)) if data.recent_triggers.is_empty() => empty_view("暂无触发记录。"),
+                        Some(Ok(data)) if data.recent_triggers.is_empty() => empty_view(
+                            "暂无触发记录。",
+                            "监控规则命中条件时，这里会留下时间与当时的数值。",
+                        ),
                         Some(Ok(data)) => data.recent_triggers.into_iter().map(|item| view! {
                             <article class="notice">
                                 <i aria-hidden="true"></i>
@@ -1294,7 +1318,16 @@ fn PortfolioSection() -> impl IntoView {
                 <div class="form-grid portfolio-form-grid">
                     <label class="form-field">
                         <span>"股票代码"</span>
-                        <input placeholder="AAPL" prop:value=ticker on:input=move |event| set_ticker.set(event_target_value(&event).to_uppercase()) />
+                        <TickerSearchInput
+                            value=ticker
+                            set_value=set_ticker
+                            placeholder="AAPL / 苹果"
+                            on_pick=Callback::new(move |item: CompanySearchItem| {
+                                if company_name.get_untracked().trim().is_empty() {
+                                    set_company_name.set(item.name_zh);
+                                }
+                            })
+                        />
                     </label>
                     <label class="form-field form-field-wide">
                         <span>"公司名称"</span>
@@ -1331,7 +1364,7 @@ fn PortfolioSection() -> impl IntoView {
             {move || match positions.get() {
                 None => loading_view(),
                 Some(Err(error)) => error_view(error),
-                Some(Ok(data)) if data.positions.is_empty() => empty_view("还没有持仓。"),
+                Some(Ok(data)) if data.positions.is_empty() => empty_view("还没有持仓。", "在上方录入成本与股数后，这里会算出盈亏。"),
                 Some(Ok(data)) => view! { <div class="portfolio-table">
                     <div class="table-row table-head"><span>"公司"</span><span>"股数"</span><span>"平均成本"</span><span>"风控线"</span><span></span></div>
                     {data.positions.into_iter().map(|position| {
@@ -1369,7 +1402,7 @@ const QUIET_START_DEFAULT: &str = "22:30";
 const QUIET_END_DEFAULT: &str = "07:00";
 
 #[component]
-fn SettingsPage() -> impl IntoView {
+fn SettingsPage(role: UserRole) -> impl IntoView {
     let (initialized, set_initialized) = create_signal(false);
     let (notify_digest, set_notify_digest) = create_signal(true);
     let (notify_positions, set_notify_positions) = create_signal(true);
@@ -1480,6 +1513,7 @@ fn SettingsPage() -> impl IntoView {
                     })}
                     <div class="quiet-note"><span aria-hidden="true">"i"</span>"紧急风控提醒不会被静音"</div>
                 </section>
+                {(role == UserRole::Owner).then(|| view! { <InviteCard /> })}
             </div>
             <div class="settings-actions">
                 <div aria-live="polite">
@@ -1497,6 +1531,62 @@ fn SettingsPage() -> impl IntoView {
                 >{move || if save.pending().get() { "正在保存…" } else { "保存设置" }}</button>
             </div>
         </main>
+    }
+}
+
+/// Owner 专属：生成邀请码。
+///
+/// 注册表单一直强制要求邀请码，而生成邀请码的 `/api/auth/invite` 在界面上没有任何入口——
+/// 结果是 owner 只能靠手敲 HTTP 请求才能把人拉进来，等于这个产品实际上无法邀请第二个用户。
+#[component]
+fn InviteCard() -> impl IntoView {
+    let (copied, set_copied) = create_signal(false);
+    let create = create_action(|(): &()| async move {
+        api::post::<_, AuthInviteResponse>("/api/auth/invite", &AuthInviteRequest { note: None })
+            .await
+    });
+    let latest = move || {
+        create
+            .value()
+            .get()
+            .and_then(Result::ok)
+            .map(|res| res.code)
+    };
+    view! {
+        <section class="settings-card">
+            <div class="settings-card-head"><h2>"邀请成员"</h2></div>
+            <p class="muted">"注册需要邀请码。生成后交给对方，一码一人，用过即失效。"</p>
+            <button
+                class="primary-button compact"
+                aria-busy=move || create.pending().get()
+                disabled=move || create.pending().get()
+                on:click=move |_| {
+                    set_copied.set(false);
+                    create.dispatch(());
+                }
+            >{move || if create.pending().get() { "正在生成…" } else { "生成邀请码" }}</button>
+            <div aria-live="polite">
+                {move || latest().map(|code| {
+                    let to_copy = code.clone();
+                    view! {
+                        <div class="invite-code">
+                            // 邀请码要能一眼读准确：等宽 + 可选中，别让用户抄错一个 O 和 0。
+                            <code>{code}</code>
+                            <button
+                                class="answer-action"
+                                on:click=move |_| {
+                                    api::copy_text(&to_copy);
+                                    set_copied.set(true);
+                                }
+                            >{move || if copied.get() { "已复制" } else { "复制" }}</button>
+                        </div>
+                    }
+                })}
+                {move || create.value().get().and_then(Result::err).map(|error| view! {
+                    <p class="inline-feedback is-error" role="alert">{error}</p>
+                })}
+            </div>
+        </section>
     }
 }
 
@@ -1597,11 +1687,17 @@ pub(crate) fn error_view(error: String) -> View {
     .into_view()
 }
 
-pub(crate) fn empty_view(message: &'static str) -> View {
+/// 空态。`hint` 说清"这里的内容从哪来"。
+///
+/// 原来七处空态共用同一句「完成上方操作后，内容会出现在这里。」——对自选/持仓/规则
+/// 是对的（上面确实有表单），但通知和触发记录是系统跑出来的，上方没有任何操作可做，
+/// 那句话是在指使用户去点一个不存在的东西。空态是产品少数几次主动说话的机会，
+/// 说错方向比不说更糟。
+pub(crate) fn empty_view(message: &'static str, hint: &'static str) -> View {
     view! {
         <div class="page-state is-empty">
             <span class="state-symbol" aria-hidden="true">"·"</span>
-            <p><strong>{message}</strong><small>"完成上方操作后，内容会出现在这里。"</small></p>
+            <p><strong>{message}</strong><small>{hint}</small></p>
         </div>
     }
     .into_view()

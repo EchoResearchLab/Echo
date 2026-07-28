@@ -9,7 +9,8 @@
   grid-template-columns: var(--rail-w) minmax(0, 1fr);
   height: 100%;
   min-height: 0;
-  transition: grid-template-columns 460ms cubic-bezier(0.2, 0.9, 0.25, 1.06);
+  /* 侧栏折叠只收列宽，不用过冲曲线——grid 每帧都会重排，过冲会整列抖。 */
+  transition: grid-template-columns var(--dur-3) var(--ease-out);
 }
 
 /* ── 会话历史 ───────────────────────────────────────────────────────── */
@@ -20,10 +21,27 @@
   grid-template-rows: auto auto minmax(0, 1fr);
   min-height: 0;
   padding: var(--sp-5) var(--sp-4);
-  border-right: 1px solid rgba(20, 66, 110, 0.07);
-  background: rgba(250, 252, 255, 0.82);
+  border-right: 1px solid var(--line-1);
+  background: var(--glass);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
+}
+
+/* 抽屉遮罩：默认不存在，只有窄屏覆盖态才由 09-responsive 打开。
+   宽屏侧栏是常驻栏，铺一层遮罩会把研究台压暗。 */
+.sidebar-scrim {
+  display: none;
+  position: fixed;
+  inset: var(--topbar-h) 0 0;
+  z-index: 44;
+  background: rgba(0, 0, 0, 0.28);
+  animation: scrim-in var(--dur-2) var(--ease-out);
+}
+
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .research-sidebar-head {
@@ -43,10 +61,10 @@
   padding: 0 var(--sp-4);
   color: var(--ink-on-brand);
   border-radius: var(--r-lg);
-  background: linear-gradient(135deg, #1384f6 0%, #4ca9ff 100%);
+  background: linear-gradient(135deg, var(--brand) 0%, var(--brand-400) 100%);
   box-shadow: var(--e-brand);
   transition:
-    background-color var(--dur-1) linear,
+    background-color var(--dur-1) var(--ease-out),
     box-shadow var(--dur-2) var(--ease-out),
     transform var(--dur-1) var(--ease-out);
 }
@@ -83,8 +101,10 @@
   color: var(--ink-3);
   border: 1px solid var(--line-2);
   border-radius: var(--r-md);
-  background: rgba(255, 255, 255, 0.78);
-  transition: color var(--dur-1) linear, border-color var(--dur-1) linear;
+  background: var(--glass-hover);
+  transition:
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out);
 }
 
 .sidebar-toggle svg {
@@ -146,7 +166,7 @@
   font-size: var(--fs-11);
   font-weight: 600;
   letter-spacing: 0.04em;
-  background: rgba(250, 252, 255, 0.92);
+  background: var(--glass-strong);
   backdrop-filter: blur(10px);
 }
 
@@ -157,20 +177,20 @@
   border: 1px solid transparent;
   border-radius: var(--r-md);
   transition:
-    border-color var(--dur-1) linear,
-    background-color var(--dur-1) linear,
-    box-shadow var(--dur-1) linear;
+    border-color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out),
+    box-shadow var(--dur-1) var(--ease-out);
 }
 
 .session-item:hover {
-  border-color: rgba(20, 66, 110, 0.06);
-  background: rgba(255, 255, 255, 0.78);
+  border-color: var(--line-1);
+  background: var(--glass-hover);
   box-shadow: var(--e-1);
 }
 
 .session-item.is-active {
-  border-color: rgba(22, 131, 248, 0.12);
-  background: linear-gradient(135deg, rgba(22, 131, 248, 0.11), rgba(95, 179, 255, 0.06));
+  border-color: var(--brand-tint-strong);
+  background: var(--brand-tint);
   box-shadow: inset 3px 0 0 var(--brand);
 }
 
@@ -218,8 +238,8 @@
   color: var(--ink-4);
   border-radius: var(--r-xs);
   opacity: 0;
-  transition: color var(--dur-1) linear, background-color var(--dur-1) linear,
-    opacity var(--dur-1) linear;
+  transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out),
+    opacity var(--dur-1) var(--ease-out);
 }
 
 .session-item-delete svg {
@@ -283,6 +303,7 @@
   overflow-y: auto;
   overflow-x: hidden;
   overflow-anchor: none;
+  scrollbar-gutter: stable;
   padding: var(--sp-8) 0 var(--sp-6);
   /* 滚动边界给一段渐隐，内容不在编辑器上沿被硬切成半张卡。下沿的渐隐比上沿长：
      上沿只需和顶栏脱开，下沿要化解「卡片被切掉一半」——20px 太短，看着仍像硬切。 */
@@ -306,67 +327,20 @@
   margin-bottom: var(--sp-8);
 }
 
-/* 用户消息只在进入时轻轻回落一次，之后完全静止。 */
 .message.user {
   display: flex;
   justify-content: flex-end;
   margin-bottom: var(--sp-6);
-  animation: bubbleIn 440ms cubic-bezier(0.2, 0.9, 0.25, 1.06) both;
 }
 
-@keyframes bubbleIn {
-  0% {
-    opacity: 0;
-    transform: translateY(10px) scale(0.985);
-  }
-  72% {
-    opacity: 1;
-    transform: translateY(-1px) scale(1.002);
-  }
-  100% {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-.message.user .bubble {
-  display: grid;
-  gap: var(--sp-2);
-  justify-items: start;
+.message.user > .bubble-text {
   max-width: min(88%, 560px);
   padding: var(--sp-4) var(--sp-5);
-  color: var(--ink-1);
-  border: 1px solid rgba(19, 66, 111, 0.09);
-  border-radius: var(--r-xl) var(--r-xl) var(--r-xs) var(--r-xl);
-  background: #ffffff;
-  box-shadow:
-    0 2px 5px rgba(19, 66, 111, 0.035),
-    0 14px 32px -24px rgba(19, 66, 111, 0.30);
-}
-
-.user-message-stack {
-  display: grid;
-  justify-items: end;
-  gap: var(--sp-2);
-  max-width: min(88%, 620px);
-}
-
-.message-author {
-  padding-right: var(--sp-2);
-  color: var(--ink-4);
-  font-size: var(--fs-11);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-
-.bubble-ticker {
-  padding: 1px var(--sp-2);
-  color: var(--brand-700);
-  font-size: var(--fs-11);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  border-radius: var(--r-xs);
-  background: var(--brand-tint);
+  font-size: var(--fs-16);
+  font-weight: 520;
+  text-align: left;
+  border-radius: 22px;
+  background: var(--bubble-user);
 }
 
 .bubble-text {
@@ -377,97 +351,12 @@
   overflow-wrap: anywhere;
 }
 
-.message.user .bubble-text {
-  color: var(--ink-1);
-}
-
-/* 助手回复作为一块完整研究稿纸，身份、答案、证据与动作共享一个清晰容器。 */
-.assistant-bubble {
-  display: block;
-}
-
 .assistant-message {
-  overflow: hidden;
-  border: 1px solid rgba(19, 66, 111, 0.08);
-  border-radius: var(--r-xl);
-  background: #ffffff;
-  box-shadow:
-    0 2px 4px rgba(19, 66, 111, 0.03),
-    0 20px 50px -30px rgba(19, 66, 111, 0.28);
-  animation: answerIn 480ms cubic-bezier(0.2, 0.9, 0.25, 1.06) both;
+  min-width: 0;
 }
 
-@keyframes answerIn {
-  0% {
-    opacity: 0;
-    transform: translateY(12px) scale(0.99);
-  }
-  72% {
-    opacity: 1;
-    transform: translateY(-1px) scale(1.001);
-  }
-  100% {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-.assistant-identity {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  min-height: 54px;
-  padding: var(--sp-3) var(--sp-5);
-  border-bottom: 1px solid rgba(19, 66, 111, 0.06);
-  background: #ffffff;
-}
-
-.assistant-avatar {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  padding: 3px;
-  border-radius: var(--r-full);
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 2px 8px rgba(22, 99, 180, 0.10);
-}
-
-.assistant-avatar .echo-mark-svg {
-  width: 24px;
-  height: 24px;
-}
-
-.assistant-identity > span:nth-child(2) {
-  display: grid;
-  gap: 1px;
-}
-
-.assistant-identity strong {
-  color: var(--ink-2);
-  font-size: var(--fs-12);
-  font-weight: 700;
-  letter-spacing: 0.12em;
-}
-
-.assistant-identity small {
-  color: var(--ink-4);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-}
-
-.assistant-identity > i {
-  width: 7px;
-  height: 7px;
-  margin-left: auto;
-  border-radius: var(--r-full);
-  background: var(--ok);
-  box-shadow: 0 0 0 4px var(--ok-tint);
-}
-
-.assistant-bubble > .answer-card {
-  padding: var(--sp-6);
+.assistant-message > .answer-card {
+  padding: 0;
 }
 
 .answer-card {
@@ -636,7 +525,7 @@
   color: var(--ink-3);
   font-size: var(--fs-12);
   border-radius: var(--r-xs);
-  transition: color var(--dur-1) linear, background-color var(--dur-1) linear;
+  transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
 }
 
 .answer-action svg {
@@ -653,63 +542,47 @@
   color: var(--ok);
 }
 
-/* ── 思考态：后端真实阶段 + 仅文字从左向右流光 ─────────────────────── */
-.thinking-process {
-  display: grid;
-  gap: var(--sp-4);
-  min-height: 104px;
-  padding: var(--sp-4);
-  border: 1px solid rgba(22, 131, 248, 0.09);
-  border-radius: var(--r-lg);
-  background: #ffffff;
+.answer-action:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
-.thinking-process-head {
+/* 报告失败的提示挨着按钮，不另起一行——一句话的错误不值得撑开答案卡的节奏。 */
+.answer-action-error {
+  color: var(--danger-ink);
+  font-size: var(--fs-12);
+}
+
+/* ── 思考态：只有后端当前真实阶段的一行文字 ────────────────────────── */
+.streaming-response {
+  display: grid;
+  gap: var(--sp-5);
+  min-width: 0;
+}
+
+.thinking-line {
   display: flex;
   align-items: center;
-  gap: var(--sp-3);
-}
-
-.thinking-live-dot {
-  width: 8px;
-  height: 8px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--brand-500);
-  animation: thinkingDot 1.8s ease-in-out infinite;
-}
-
-@keyframes thinkingDot {
-  0%,
-  100% {
-    opacity: 0.42;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-.thinking-process-head > span:last-child {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
+  min-height: 32px;
 }
 
 .thinking-shimmer {
   width: fit-content;
   max-width: 100%;
   color: transparent;
-  font-size: var(--fs-15);
+  font-size: var(--fs-16);
   font-weight: 600;
   line-height: var(--lh-snug);
+  /* 高光扫过的底色必须跟随主题：写死的 #a4a6aa 在深色下比正文还暗，
+     "正在思考"四个字会糊进背景里。 */
   background: linear-gradient(
     90deg,
-    var(--ink-2) 0%,
-    var(--ink-2) 34%,
-    #70b9ff 47%,
-    #1683f8 52%,
-    var(--ink-2) 66%,
-    var(--ink-2) 100%
+    var(--ink-3) 0%,
+    var(--ink-3) 34%,
+    var(--brand-400) 47%,
+    var(--brand) 52%,
+    var(--ink-3) 66%,
+    var(--ink-3) 100%
   );
   background-size: 230% 100%;
   background-position: -130% 50%;
@@ -718,91 +591,39 @@
   animation: thinkingTextSweep 2.4s linear infinite;
 }
 
-.thinking-process-head small {
-  color: var(--ink-4);
-  font-size: var(--fs-11);
-  font-weight: 500;
-}
-
 @keyframes thinkingTextSweep {
   to {
     background-position: 130% 50%;
   }
 }
 
-.thinking-trail {
+.processed-response {
+  display: grid;
+  gap: var(--sp-5);
+}
+
+.processed-status {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: var(--sp-2);
-  min-height: 30px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.thinking-trail::-webkit-scrollbar {
-  display: none;
-}
-
-.thinking-step {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: none;
-  min-height: 28px;
-  padding: 0 var(--sp-3);
   color: var(--ink-4);
-  font-size: var(--fs-11);
-  font-weight: 550;
-  white-space: nowrap;
-  border: 1px solid var(--line-1);
-  border-radius: var(--r-full);
-  background: var(--paper-canvas);
-  transition:
-    color 240ms ease,
-    border-color 240ms ease,
-    background-color 240ms ease;
+  font-size: var(--fs-14);
+  font-variant-numeric: tabular-nums;
 }
 
-.thinking-step i {
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--line-3);
+.processed-status strong {
+  font-weight: 600;
 }
 
-.thinking-step.is-current {
-  color: var(--brand-800);
-  border-color: rgba(22, 131, 248, 0.15);
-  background: var(--brand-tint);
+.processed-status span {
+  font-weight: 450;
 }
 
-.thinking-step.is-current i {
-  background: var(--brand-500);
-}
-
-.thinking-step.is-complete {
-  color: var(--ink-3);
-  background: #ffffff;
-}
-
-.thinking-step.is-complete i {
-  position: relative;
-  width: 12px;
-  height: 12px;
-  background: var(--ok-tint);
-}
-
-.thinking-step.is-complete i::after {
-  position: absolute;
-  top: 2px;
-  left: 4px;
-  width: 3px;
-  height: 6px;
-  content: "";
-  border-right: 1.5px solid var(--ok);
-  border-bottom: 1.5px solid var(--ok);
-  transform: rotate(45deg);
+.processed-divider {
+  width: 100%;
+  height: 1px;
+  margin-top: calc(-1 * var(--sp-2));
+  background: var(--line-1);
 }
 
 /* 生成中的文本尾部光标——比整段闪烁克制得多。 */
@@ -1226,8 +1047,8 @@
   background: var(--paper-raised);
   text-decoration: none;
   transition:
-    border-color var(--dur-1) linear,
-    background-color var(--dur-1) linear;
+    border-color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out);
 }
 
 .filing-item:hover {
@@ -1266,7 +1087,7 @@
   border-radius: var(--r-sm);
   background: var(--paper-raised);
   text-decoration: none;
-  transition: border-color var(--dur-1) linear, background-color var(--dur-1) linear;
+  transition: border-color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
 }
 
 .source-card:hover {
@@ -1337,7 +1158,7 @@
   list-style: none;
   cursor: pointer;
   border-radius: inherit;
-  transition: background-color var(--dur-1) linear;
+  transition: background-color var(--dur-1) var(--ease-out);
 }
 
 .evidence-panel > summary::-webkit-details-marker {
@@ -1437,7 +1258,7 @@
   border: 1px solid var(--line-2);
   border-radius: var(--r-sm);
   background: var(--paper-raised);
-  transition: color var(--dur-1) linear, border-color var(--dur-1) linear;
+  transition: color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
 }
 
 .stream-cancel:hover,
@@ -1511,7 +1332,7 @@
    把研究入口挤到折线以下。克制的标题让内容更早出现。 */
 .hero-heading-row h1 {
   display: grid;
-  color: #142235;
+  color: var(--ink-1);
   font-family: var(--font-serif);
   font-size: clamp(38px, 4.4vw, 58px);
   font-weight: 500;
@@ -1521,7 +1342,7 @@
 
 .hero-heading-row .line-2 {
   color: transparent;
-  background: linear-gradient(92deg, #0879e8 0%, #52abff 66%, #9dd5ff 100%);
+  background: linear-gradient(92deg, var(--brand-ink) 0%, var(--brand-400) 66%, var(--brand-200) 100%);
   -webkit-background-clip: text;
   background-clip: text;
 }
@@ -1562,36 +1383,37 @@
   display: grid;
 }
 
-/* 固定两列而非 auto-fit：空态被 `.conversation > div` 限制在阅读宽度（约 796px）内，
-   放不下四列 212px（需 896px），auto-fit 于是塌成 3+1，第四张卡永远孤零零挂在下一行。
-   两列在这个宽度下每张约 390px，信息更舒展，且四个入口刚好排满两行，不会有孤儿。 */
+/* 固定列数而非 auto-fit：auto-fit 在这个宽度上会塌成 3+1，第四张卡孤零零挂在下一行。
+   宽屏排满一行四个入口，≤1180 收成 2×2（见 09-responsive），两种都不会留孤儿。 */
 .company-showcase {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--sp-3);
 }
 
+/* 三行显式给高：问题行吃掉剩余空间，"开始研究"因此贴在卡片底部。
+   原来是 align-content:start 把三行全顶到上边——问题只有一行的卡，分隔线和箭头就比
+   邻居高出一整行，四张卡底边齐、内部却参差。同一排的动作永远排在同一条线上。 */
 .company-card {
   display: grid;
+  grid-template-rows: auto 1fr auto;
   gap: var(--sp-4);
-  align-content: start;
   min-height: 178px;
   padding: var(--sp-4);
   text-align: left;
   border: 1px solid var(--line-1);
   border-radius: var(--r-lg);
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(246, 250, 255, 0.88));
-  box-shadow: 0 10px 30px -24px rgba(21, 66, 110, 0.30);
+  background: linear-gradient(145deg, var(--paper-raised), var(--paper-canvas));
+  box-shadow: var(--e-2);
   transition:
-    border-color var(--dur-1) linear,
+    border-color var(--dur-1) var(--ease-out),
     box-shadow var(--dur-2) var(--ease-out),
     transform var(--dur-2) var(--ease-out);
 }
 
 .company-card:hover {
-  border-color: rgba(22, 131, 248, 0.26);
-  box-shadow: 0 18px 36px -22px rgba(22, 104, 196, 0.30);
+  border-color: var(--brand-ring);
+  box-shadow: var(--e-3);
   transform: translateY(-3px);
 }
 
@@ -1619,8 +1441,8 @@
   font-style: normal;
   font-weight: 700;
   border-radius: var(--r-full);
-  background: linear-gradient(145deg, #edf7ff, #d7ecff);
-  box-shadow: inset 0 0 0 1px rgba(22, 131, 248, 0.08);
+  background: linear-gradient(145deg, var(--brand-050), var(--brand-100));
+  box-shadow: inset 0 0 0 1px var(--brand-tint);
 }
 
 .company-card-head > span {
@@ -1704,20 +1526,20 @@
   color: var(--ink-3);
   font-size: var(--fs-12);
   white-space: nowrap;
-  border: 1px solid rgba(19, 66, 111, 0.09);
+  border: 1px solid var(--line-1);
   border-radius: var(--r-full);
-  background: rgba(255, 255, 255, 0.68);
+  background: var(--glass-hover);
   transition:
-    color var(--dur-1) linear,
-    border-color var(--dur-1) linear,
-    background-color var(--dur-1) linear,
+    color var(--dur-1) var(--ease-out),
+    border-color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out),
     transform var(--dur-1) var(--ease-out);
 }
 
 .composer-suggestions button:hover:not(:disabled) {
   color: var(--brand-ink);
-  border-color: rgba(22, 131, 248, 0.22);
-  background: rgba(255, 255, 255, 0.96);
+  border-color: var(--brand-ring);
+  background: var(--glass-thumb);
   transform: translateY(-1px);
 }
 
@@ -1742,22 +1564,21 @@
   gap: var(--sp-3);
   align-items: end;
   padding: var(--sp-3) var(--sp-3) var(--sp-3) var(--sp-5);
-  border: 1px solid rgba(19, 66, 111, 0.10);
+  border: 1px solid var(--line-1);
   border-radius: var(--r-xl);
-  background: rgba(255, 255, 255, 0.88);
+  background: var(--glass-strong);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   box-shadow:
-    0 16px 40px -26px rgba(19, 66, 111, 0.38),
-    0 2px 6px rgba(19, 66, 111, 0.04),
+    var(--e-3),
     var(--glass-sheen);
   transition:
-    border-color var(--dur-1) linear,
+    border-color var(--dur-1) var(--ease-out),
     box-shadow var(--dur-2) var(--ease-out);
 }
 
 .composer-panel:focus-within {
-  border-color: rgba(0, 113, 227, 0.30);
+  border-color: var(--brand-ring);
   box-shadow: var(--e-2), var(--glass-sheen), 0 0 0 3px var(--brand-ring);
 }
 
@@ -1816,10 +1637,10 @@
   height: 38px;
   color: var(--ink-on-brand);
   border-radius: var(--r-full);
-  background: linear-gradient(145deg, #1683f8, #47a7ff);
+  background: linear-gradient(145deg, var(--brand), var(--brand-400));
   box-shadow: var(--e-brand);
   transition:
-    background-color var(--dur-1) linear,
+    background-color var(--dur-1) var(--ease-out),
     box-shadow var(--dur-2) var(--ease-out),
     transform var(--dur-1) var(--ease-out);
 }
@@ -1865,9 +1686,7 @@
 .desk:not(.has-thread) .composer-panel {
   padding: var(--sp-4) var(--sp-4) var(--sp-4) var(--sp-5);
   border-radius: var(--r-xl);
-  box-shadow:
-    0 24px 60px -34px rgba(19, 66, 111, 0.38),
-    0 4px 14px rgba(19, 66, 111, 0.05);
+  box-shadow: var(--e-pop);
 }
 
 .desk:not(.has-thread) .composer textarea {
@@ -1882,12 +1701,11 @@
 
 /* 空态时编辑器随 hero 一起进场。 */
 .desk:not(.has-thread) .composer-panel {
-  animation: composerIn var(--dur-4) var(--ease-emph) 100ms both;
+  animation: composerFade 160ms ease-out both;
 }
 
-@keyframes composerIn {
+@keyframes composerFade {
   from {
     opacity: 0;
-    transform: translateY(10px);
   }
 }

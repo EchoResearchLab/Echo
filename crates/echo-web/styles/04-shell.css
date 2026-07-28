@@ -13,22 +13,6 @@
   height: 100dvh;
   overflow: hidden;
   background: transparent;
-  animation: workspaceSpringIn 620ms cubic-bezier(0.2, 0.9, 0.25, 1.06) both;
-}
-
-@keyframes workspaceSpringIn {
-  0% {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  76% {
-    opacity: 1;
-    transform: translateY(-1px);
-  }
-  100% {
-    opacity: 1;
-    transform: none;
-  }
 }
 
 /* ── 顶栏：毛玻璃 ───────────────────────────────────────────────────── */
@@ -54,7 +38,7 @@
   flex: none;
   padding: var(--sp-2) var(--sp-2) var(--sp-2) 0;
   border-radius: var(--r-sm);
-  transition: opacity var(--dur-1) linear;
+  transition: opacity var(--dur-1) var(--ease-out);
 }
 
 .topbar-brand:hover {
@@ -108,10 +92,10 @@
   margin-left: var(--sp-6);
   padding: 4px;
   overflow-x: auto;
-  border: 1px solid rgba(255, 255, 255, 0.8);
+  border: 1px solid var(--glass-line);
   border-radius: var(--r-full);
-  background: rgba(226, 234, 243, 0.68);
-  box-shadow: inset 0 1px 2px rgba(14, 48, 82, 0.05);
+  background: var(--glass-track);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
   scrollbar-width: none;
 }
 
@@ -130,7 +114,7 @@
   white-space: nowrap;
   border-radius: var(--r-full);
   transition:
-    color var(--dur-1) linear,
+    color var(--dur-1) var(--ease-out),
     background-color var(--dur-2) var(--ease-out),
     box-shadow var(--dur-2) var(--ease-out);
 }
@@ -142,21 +126,8 @@
 .nav-item.is-active {
   color: var(--brand-ink);
   font-weight: 600;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 3px 10px rgba(20, 62, 108, 0.10), var(--glass-sheen);
-  animation: navSpring 340ms cubic-bezier(0.2, 0.9, 0.25, 1.08) both;
-}
-
-@keyframes navSpring {
-  0% {
-    transform: scale(0.965);
-  }
-  74% {
-    transform: scale(1.008);
-  }
-  100% {
-    transform: none;
-  }
+  background: var(--glass-thumb);
+  box-shadow: var(--glass-thumb-shadow), var(--glass-sheen);
 }
 
 /* ── 顶栏右侧 ───────────────────────────────────────────────────────── */
@@ -181,7 +152,7 @@
   color: var(--ink-3);
   border: 1px solid transparent;
   border-radius: var(--r-full);
-  transition: color var(--dur-1) linear, background-color var(--dur-1) linear;
+  transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
 }
 
 .notification-button svg {
@@ -192,7 +163,7 @@
 .notification-button:hover {
   color: var(--ink-1);
   border-color: var(--line-1);
-  background: rgba(255, 255, 255, 0.82);
+  background: var(--glass-hover);
 }
 
 .notification-button > span {
@@ -225,19 +196,15 @@
   -webkit-backdrop-filter: var(--glass-blur);
   box-shadow: var(--e-pop), var(--glass-sheen);
   transform-origin: top right;
-  animation: popoverIn 360ms cubic-bezier(0.16, 1.26, 0.3, 1) both;
+  animation: popoverIn var(--dur-3) var(--ease-out) both;
 }
 
 @keyframes popoverIn {
-  0% {
+  from {
     opacity: 0;
-    transform: translateY(-8px) scale(0.94);
+    transform: translateY(-6px) scale(0.98);
   }
-  72% {
-    opacity: 1;
-    transform: translateY(2px) scale(1.012);
-  }
-  100% {
+  to {
     opacity: 1;
     transform: none;
   }
@@ -294,13 +261,13 @@
   padding: 0 var(--sp-3) 0 var(--sp-1);
   border: 1px solid transparent;
   border-radius: var(--r-full);
-  transition: background-color var(--dur-1) linear;
+  transition: background-color var(--dur-1) var(--ease-out);
 }
 
 .account-card:hover,
 .account-card.is-open {
   border-color: var(--line-1);
-  background: rgba(255, 255, 255, 0.86);
+  background: var(--glass-hover);
   box-shadow: var(--e-1);
 }
 
@@ -316,8 +283,8 @@
   font-weight: 700;
   letter-spacing: 0.02em;
   border-radius: var(--r-full);
-  background: linear-gradient(145deg, #e8f4ff, #cfe8ff);
-  box-shadow: inset 0 0 0 1px rgba(22, 131, 248, 0.10);
+  background: linear-gradient(145deg, var(--brand-050), var(--brand-100));
+  box-shadow: inset 0 0 0 1px var(--brand-tint);
 }
 
 .user-avatar::after {
@@ -327,10 +294,10 @@
   width: 8px;
   height: 8px;
   content: "";
-  border: 2px solid #ffffff;
+  /* 描边用页面纸面色而不是白：深色下白圈会在近黑顶栏上变成一枚亮点。 */
+  border: 2px solid var(--paper-raised);
   border-radius: 50%;
-  background: #34c759;
-  box-shadow: 0 1px 4px rgba(25, 96, 52, 0.24);
+  background: var(--ok);
 }
 
 .account-copy {
@@ -391,8 +358,8 @@
   height: 44px;
   font-size: var(--fs-14);
   box-shadow:
-    inset 0 0 0 1px rgba(22, 131, 248, 0.10),
-    0 8px 20px -14px rgba(20, 104, 187, 0.52);
+    inset 0 0 0 1px var(--brand-tint),
+    var(--e-2);
 }
 
 .account-menu-profile > span:last-child {
@@ -424,12 +391,14 @@
   margin: var(--sp-2);
   padding: var(--sp-4);
   overflow: hidden;
-  border: 1px solid rgba(68, 158, 246, 0.12);
+  border: 1px solid var(--brand-tint-strong);
   border-radius: var(--r-md);
+  /* 底面用品牌色阶叠在纸面上：深色下 --brand-050/100 已翻成低透明度蓝，
+     同一份声明两套皮都成立，不需要深色分支。 */
   background:
-    radial-gradient(160px 90px at 100% 0%, rgba(104, 186, 255, 0.20), transparent 70%),
-    linear-gradient(145deg, rgba(238, 247, 255, 0.94), rgba(249, 252, 255, 0.92));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+    radial-gradient(160px 90px at 100% 0%, var(--brand-tint-strong), transparent 70%),
+    linear-gradient(145deg, var(--brand-050), var(--paper-raised));
+  box-shadow: var(--glass-sheen);
 }
 
 .subscription-heading {
@@ -464,12 +433,12 @@
   font-size: 10px;
   font-weight: 650;
   border-radius: var(--r-full);
-  background: rgba(22, 131, 248, 0.10);
+  background: var(--brand-tint-strong);
 }
 
 .subscription-status.is-active {
-  color: #16803b;
-  background: rgba(52, 199, 89, 0.12);
+  color: var(--ok);
+  background: var(--ok-tint);
 }
 
 .subscription-features {
@@ -484,9 +453,9 @@
   color: var(--brand-ink);
   font-size: 10px;
   font-weight: 550;
-  border: 1px solid rgba(22, 131, 248, 0.10);
+  border: 1px solid var(--brand-tint);
   border-radius: var(--r-full);
-  background: rgba(255, 255, 255, 0.70);
+  background: var(--glass-hover);
 }
 
 .account-menu-actions {
@@ -506,7 +475,7 @@
   font-size: var(--fs-14);
   text-align: left;
   border-radius: var(--r-sm);
-  transition: color var(--dur-1) linear, background-color var(--dur-1) linear;
+  transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
 }
 
 .account-menu-actions button b {
@@ -548,31 +517,59 @@
 }
 
 /* ── 内容舞台 ───────────────────────────────────────────────────────── */
+/* 舞台承载两种形态的页面，行数不同，必须分开定义——固定成单行时，
+   「页头 + 内容」这种两个兄弟元素的页面（资料库、设置）会被塞进同一格里
+   叠印：页面大标题被下面的分段控件压掉一半，浅色深色都一样。 */
 .workspace-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: min-content;
+  align-content: start;
   min-width: 0;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* 滚动条出现/消失时不把整页内容左右挤一下。 */
+  scrollbar-gutter: stable;
 }
 
-/* 页面切换带一点弹性回落，始终只动合成层，不改变布局尺寸。 */
+/* 研究台是唯一的单子元素页面，它要吃满可用高度（对话流自己内部滚动）。 */
+.workspace-stage:has(> :only-child) {
+  grid-auto-rows: minmax(0, 1fr);
+  align-content: stretch;
+}
+
+/* 页面切换：透明度 + 一点点上移。
+   原来只有 140ms 纯淡入——太快且完全没有方向感，读起来是"内容闪了一下"而不是
+   "换了一页"。6px 的上移给出方向，dur-3 给眼睛跟上的时间；主舞台本身仍然
+   绝不缩放，缩放会让整页字重新光栅化，糊一帧比不动更廉价。 */
+/* fill-mode 用 backwards 而不是 both。both 会把 `to` 的 transform 永久留在元素上
+   （即使值是 none，计算值也停在单位矩阵），于是舞台永远是一个 transform containing
+   block——它内部所有 position: fixed 就不再相对视口，而是相对舞台。窄屏的历史抽屉
+   因此整体下坠 52px，顶栏与抽屉之间露出一条谁也没遮住的缝。
+   这里的 `to` 本来就等于元素的静止态，不需要 forwards 去保持；改成 backwards 只留
+   进场前的那一帧，动画一结束 transform 就彻底消失，视觉完全不变。 */
 .workspace-stage > * {
-  transform-origin: 50% 0;
-  animation: stageIn 460ms cubic-bezier(0.2, 0.9, 0.25, 1.06) both;
+  min-width: 0;
+  min-height: 0;
+  animation: stageEnter var(--dur-3) var(--ease-out) backwards;
 }
 
-@keyframes stageIn {
-  0% {
+@keyframes stageEnter {
+  from {
     opacity: 0;
-    transform: translateY(9px);
+    transform: translateY(6px);
   }
-  76% {
-    opacity: 1;
-    transform: translateY(-1px);
-  }
-  100% {
+  to {
     opacity: 1;
     transform: none;
   }
+}
+
+/* 资料库/设置是「页头 + 内容」两个兄弟，逐个进场会让副标题追着标题跑。
+   给内容一点延迟，让页头先落位——两段而不是两次。 */
+.workspace-stage > .page-header + .page-content {
+  animation-delay: 60ms;
 }
 
 .page-content {

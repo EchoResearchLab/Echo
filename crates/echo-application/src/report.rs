@@ -9,8 +9,8 @@ use crate::answer_prompt::{
 };
 use crate::research::{
     PersistResearchSession, PriorTurn, ResearchFacts, ResearchPorts, ResearchService,
-    citation_guard_view, earnings_view, filings_view, guard_view, load_prior_turns_for,
-    persist_company_memory_if_safe, route_view, valuation_view,
+    citation_guard_view, earnings_view, filings_view, guard_outcome, load_prior_turns_for,
+    persist_company_memory_if_safe, record_guard_audit, route_view, valuation_view,
 };
 use crate::research_memory::CompanyMemory;
 use crate::{DecisionPanel, build_panel};
@@ -84,7 +84,9 @@ impl ReportService {
             _ => (compose_report_fallback(&ctx), ReportMode::Local),
         };
 
-        let fact_guard = Some(guard_view(&req, &facts, &panel, &markdown));
+        let outcome = guard_outcome(&req, &facts, &panel, &markdown);
+        record_guard_audit(ports, &req.ticker, "report", outcome.clone()).await;
+        let fact_guard = Some(outcome.view);
         let citation_guard = citation_guard_view(&facts.evidence, &markdown);
         persist_company_memory_if_safe(
             ports,

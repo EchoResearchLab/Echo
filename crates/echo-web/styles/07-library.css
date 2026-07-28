@@ -35,7 +35,7 @@
   font-weight: 550;
   white-space: nowrap;
   border-radius: var(--r-sm);
-  transition: color var(--dur-1) linear;
+  transition: color var(--dur-1) var(--ease-out);
 }
 
 .segmented-item:hover:not(.is-active) {
@@ -209,7 +209,7 @@
   height: var(--ctl-sm);
   color: var(--ink-3);
   border-radius: var(--r-xs);
-  transition: color var(--dur-1) linear, background-color var(--dur-1) linear;
+  transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
 }
 
 .watch-star svg {
@@ -299,7 +299,7 @@
 
 .profile-item {
   border-radius: var(--r-sm);
-  transition: background-color var(--dur-1) linear;
+  transition: background-color var(--dur-1) var(--ease-out);
 }
 
 .profile-item:hover {

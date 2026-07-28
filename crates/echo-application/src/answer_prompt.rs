@@ -66,6 +66,62 @@ fn truncate_chars(s: &str, max: usize) -> String {
     out
 }
 
+/// 会话历史最多回看多少轮。之前是固定 3 轮，第 4 轮起用户说的一切都消失——
+/// 多轮追问到中段就开始"失忆"，同一个问题被反复问回来。
+const MAX_HISTORY_TURNS: usize = 8;
+/// 历史块的总字符预算。按预算而不是按轮数截断，是因为"3 轮"在短问答里浪费、
+/// 在长答案里又爆掉；真正稀缺的是提示词长度，就直接管住它。
+const HISTORY_CHAR_BUDGET: usize = 2_400;
+/// 最近一轮答案的上限。越近的轮次越可能被追问指代，给它最多的篇幅。
+const HISTORY_NEWEST_ANSWER_CHARS: usize = 700;
+/// 越往前的轮次每轮递减到多少为止——低于这个长度的摘要已经无法承接指代，
+/// 与其塞一句残缺的开头，不如把预算让给更近的轮次。
+const HISTORY_OLDEST_ANSWER_CHARS: usize = 180;
+/// 用户问题本身几乎总是短句，但不设上限就可能被一段粘贴进来的长文撑爆。
+const HISTORY_QUESTION_CHARS: usize = 200;
+
+/// 构造"此前几轮问答"块。
+///
+/// 分配规则：从最近一轮往前，答案配额按 0.68 逐轮衰减到
+/// [`HISTORY_OLDEST_ANSWER_CHARS`] 为止；累计超出 [`HISTORY_CHAR_BUDGET`] 就停止回看。
+/// 这样一次深聊里，紧邻的两三轮仍然接近完整，更早的轮次退化成线索——而不是像以前那样
+/// 直接消失。
+///
+/// **历史永远只是指代线索**：块头的措辞明确禁止把其中的数字当本轮依据，
+/// 数字一律以下方事实块为准（历史里的旧价格/旧估值不进 `FactsRegistry`）。
+fn history_block(history: &[PriorTurn]) -> String {
+    if history.is_empty() {
+        return String::new();
+    }
+    let mut budget = HISTORY_CHAR_BUDGET;
+    let mut allowance = HISTORY_NEWEST_ANSWER_CHARS;
+    let mut rendered: Vec<String> = Vec::new();
+
+    for turn in history.iter().rev().take(MAX_HISTORY_TURNS) {
+        let question = truncate_chars(turn.question.trim(), HISTORY_QUESTION_CHARS);
+        let answer = truncate_chars(turn.answer.trim(), allowance);
+        let cost = question.chars().count() + answer.chars().count();
+        if cost > budget {
+            break;
+        }
+        budget -= cost;
+        rendered.push(format!("用户问：{question}\n上轮作答摘要：{answer}\n\n"));
+        allowance = (allowance * 68 / 100).max(HISTORY_OLDEST_ANSWER_CHARS);
+    }
+
+    if rendered.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "\n== 本次会话此前几轮问答（仅供理解代词/实体指代与承接上文，不得引用其中任何数字作为本轮核对依据——本轮所有数字以下方事实块为准）==\n",
+    );
+    // 收集时是从新到旧，喂给模型要按时间正序，否则"上一轮"指向的是最早那轮。
+    for turn in rendered.into_iter().rev() {
+        out.push_str(&turn);
+    }
+    out
+}
+
 /// 把一个可选定点数渲染成事实行的值；缺就「未核到」。
 pub(crate) fn field(value: Option<Decimal>, unit: &str) -> String {
     match value {
@@ -100,18 +156,9 @@ pub fn build_user_prompt(ctx: &AnswerContext) -> String {
     let mut out = String::new();
     out.push_str(&format!("研究对象：{name}（{}）\n", ctx.panel.ticker));
 
-    if !ctx.history.is_empty() {
-        out.push_str(
-            "\n== 本次会话此前几轮问答（仅供理解代词/实体指代，不得引用其中任何数字作为本轮核对依据——本轮所有数字以下方事实块为准）==\n",
-        );
-        let recent = ctx.history.iter().rev().take(3).collect::<Vec<_>>();
-        for turn in recent.into_iter().rev() {
-            out.push_str(&format!(
-                "用户问：{}\n上轮作答摘要：{}\n\n",
-                turn.question,
-                truncate_chars(&turn.answer, 300)
-            ));
-        }
+    let history = history_block(ctx.history);
+    if !history.is_empty() {
+        out.push_str(&history);
     }
 
     out.push_str(&format!("用户问题：{}\n", ctx.question));
@@ -659,7 +706,7 @@ mod tests {
             price: Some(dec!(190)),
             ..Default::default()
         };
-        let long_answer = "壁".repeat(400);
+        let long_answer = "壁".repeat(900);
         let history = vec![PriorTurn {
             question: "护城河？".into(),
             answer: long_answer.clone(),
@@ -677,6 +724,73 @@ mod tests {
         });
         assert!(!prompt.contains(&long_answer));
         assert!(prompt.contains('…'));
+    }
+
+    /// 之前固定只带 3 轮：一次八轮的深聊里，前五轮用户说过的一切都不进提示词，
+    /// 模型于是把已经回答过的问题又问回来。现在按预算回看更多轮。
+    #[test]
+    fn history_keeps_more_than_three_turns_within_budget() {
+        let (panel, financials) = panel_with(Some(dec!(190)), false);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let history: Vec<PriorTurn> = (1..=6)
+            .map(|i| PriorTurn {
+                question: format!("第{i}问：这家公司怎么样？"),
+                answer: format!("第{i}答：结论摘要。"),
+            })
+            .collect();
+        let prompt = build_user_prompt(&AnswerContext {
+            question: "它的估值贵不贵？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &[],
+            evidence: &[],
+            depth: ResearchDepth::Standard,
+            history: &history,
+        });
+        for i in 1..=6 {
+            assert!(
+                prompt.contains(&format!("第{i}问")),
+                "第 {i} 轮应当仍在上下文里"
+            );
+        }
+        // 顺序必须是时间正序，否则模型理解的"上一轮"是最早那一轮。
+        let first = prompt.find("第1问").expect("第一轮");
+        let last = prompt.find("第6问").expect("最后一轮");
+        assert!(first < last, "历史必须按时间正序喂给模型");
+    }
+
+    /// 预算是硬约束：一堆长答案不能把提示词撑爆，超出就停止回看更早的轮次。
+    #[test]
+    fn history_stops_at_the_character_budget() {
+        let (panel, financials) = panel_with(Some(dec!(190)), false);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let history: Vec<PriorTurn> = (1..=8)
+            .map(|i| PriorTurn {
+                question: format!("第{i}问"),
+                answer: "壁".repeat(800),
+            })
+            .collect();
+        let prompt = build_user_prompt(&AnswerContext {
+            question: "它的估值贵不贵？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &[],
+            evidence: &[],
+            depth: ResearchDepth::Standard,
+            history: &history,
+        });
+        assert!(prompt.contains("第8问"), "最近一轮必须保留");
+        assert!(!prompt.contains("第1问"), "超出预算的早期轮次应当被丢弃");
     }
 
     #[test]

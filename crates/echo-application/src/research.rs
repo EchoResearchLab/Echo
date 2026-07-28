@@ -20,9 +20,9 @@ use echo_contracts::{
 };
 use echo_domain::{
     AssetStage, Company, EarningsCalendar, Evidence, Filing, Financials, HistoricalValuation,
-    MarketSnapshot, MultipleType, PeerAnchor, RegistrySources, ResearchRoute, build_facts_registry,
-    build_soft_note, classify_asset_stage, intent_wants_web_evidence, route_research_intent,
-    verify_answer_citations, verify_answer_numbers,
+    MarketSnapshot, MultipleType, PeerAnchor, RegistrySources, ResearchRoute, Verdict,
+    build_facts_registry, build_soft_note, classify_asset_stage, intent_wants_web_evidence,
+    route_research_intent, verify_answer_citations, verify_answer_numbers,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -219,6 +219,22 @@ pub trait ResearchPorts: Send + Sync {
         user_id: &str,
         session: PersistResearchSession,
     ) -> impl Future<Output = Result<String, String>> + Send;
+
+    /// 把本轮护栏结论记进质量底账。默认无操作——离线测试与无库场景不该因为记不了账
+    /// 就让研究失败；它是观测通路，不是研究链路的一环。
+    fn record_guard_audit(&self, _audit: GuardAuditRecord) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+}
+
+/// 一轮护栏结论的落库形态。应用层只描述"哪条链路、核了什么、哪些数字硬失败"，
+/// 由边界层决定写进哪张表。
+#[derive(Clone, Debug)]
+pub struct GuardAuditRecord {
+    pub ticker: String,
+    /// 产出这段答案的链路：`ask` / `ask_stream` / `compare` / `report`。
+    pub mode: &'static str,
+    pub outcome: GuardOutcome,
 }
 
 /// 一次非流式研究的结果；可追溯主体、护栏与是否已落库。
@@ -391,9 +407,13 @@ impl ResearchService {
             }
         };
 
-        let fact_guard = answer
+        let guard = answer
             .as_deref()
-            .map(|draft| guard_view(&req, &facts, &panel, draft));
+            .map(|draft| guard_outcome(&req, &facts, &panel, draft));
+        if let Some(outcome) = guard.clone() {
+            record_guard_audit(ports, &req.ticker, "ask", outcome).await;
+        }
+        let fact_guard = guard.map(|outcome| outcome.view);
         let citation_guard = answer
             .as_deref()
             .and_then(|draft| citation_guard_view(&facts.evidence, draft));
@@ -500,12 +520,21 @@ impl ResearchService {
             };
 
         // 分别验证：每腿只吃自己的登记表核对同一段作答，互不借用。
-        let primary_guard = answer
+        let primary_outcome = answer
             .as_deref()
-            .map(|draft| guard_view(&primary_req, &primary_facts, &primary_panel, draft));
-        let peer_guard = answer
+            .map(|draft| guard_outcome(&primary_req, &primary_facts, &primary_panel, draft));
+        let peer_outcome = answer
             .as_deref()
-            .map(|draft| guard_view(&peer_req, &peer_facts, &peer_panel, draft));
+            .map(|draft| guard_outcome(&peer_req, &peer_facts, &peer_panel, draft));
+        // 两腿各记一条：对比里"哪一边的数字站不住"是最需要分开看的，合成一条就没法归因。
+        if let Some(outcome) = primary_outcome.clone() {
+            record_guard_audit(ports, &primary_req.ticker, "compare", outcome).await;
+        }
+        if let Some(outcome) = peer_outcome.clone() {
+            record_guard_audit(ports, &peer_req.ticker, "compare", outcome).await;
+        }
+        let primary_guard = primary_outcome.map(|outcome| outcome.view);
+        let peer_guard = peer_outcome.map(|outcome| outcome.view);
 
         let response = CompareResponse {
             route: route_view(&route),
@@ -705,9 +734,13 @@ async fn drive_stream<P: ResearchPorts>(
     ))
     .await?;
 
-    let fact_guard = answer
+    let guard = answer
         .as_deref()
-        .map(|draft| guard_view(&req, &facts, &panel, draft));
+        .map(|draft| guard_outcome(&req, &facts, &panel, draft));
+    if let Some(outcome) = guard.clone() {
+        record_guard_audit(ports, &req.ticker, "ask_stream", outcome).await;
+    }
+    let fact_guard = guard.map(|outcome| outcome.view);
     let citation_guard = answer
         .as_deref()
         .and_then(|draft| citation_guard_view(&facts.evidence, draft));
@@ -828,8 +861,16 @@ pub(crate) async fn persist_company_memory_if_safe<P: ResearchPorts>(
     let Some(answer) = answer.filter(|value| !value.trim().is_empty()) else {
         return;
     };
+    // 只有**硬**失败才拦记忆：数字与登记表对不上（`fact_guard.has_hard_fail`），
+    // 或引用了不存在的来源号（`citation_guard.has_hard_fail`）——这两样都说明这段答案
+    // 本身不可信，沉淀下来会污染后续所有会话。
+    //
+    // `ungrounded`（有证据却一个来源号都没标）**不拦**。领域层把它定义为 soft 提示、
+    // 明确"不拦截"，这里却当硬条件用，结果是：恰恰在定性研究——记忆最该积累的地方——
+    // 只要模型忘了写 `[1]`，这家公司的论点就永远存不下来。它是引用完整性的风格问题，
+    // 不是"这段判断是错的"的证据。
     if fact_guard.is_some_and(|guard| guard.has_hard_fail)
-        || citation_guard.is_some_and(|guard| guard.has_hard_fail || guard.ungrounded)
+        || citation_guard.is_some_and(|guard| guard.has_hard_fail)
     {
         return;
     }
@@ -888,12 +929,42 @@ pub(crate) async fn gather_evidence<P: ResearchPorts>(
     merged
 }
 
-pub(crate) fn guard_view(
+/// 把一轮护栏结论交给端口落账。空 ticker 不记——没有主体的记录在统计里没法归因。
+pub(crate) async fn record_guard_audit<P: ResearchPorts>(
+    ports: &P,
+    ticker: &str,
+    mode: &'static str,
+    outcome: GuardOutcome,
+) {
+    if ticker.trim().is_empty() {
+        return;
+    }
+    ports
+        .record_guard_audit(GuardAuditRecord {
+            ticker: ticker.to_string(),
+            mode,
+            outcome,
+        })
+        .await;
+}
+
+/// 一轮数字护栏的完整结论：给前端的聚合视图 + 给质量底账的硬失败明细。
+///
+/// 两者必须来自**同一次** `verify_answer_numbers`——分两次跑不仅浪费，还会在取数或
+/// 提示词有随机性时产生"视图说 0 个 hard、底账里却记着 2 条"的对不上账。
+#[derive(Clone, Debug)]
+pub struct GuardOutcome {
+    pub view: GuardView,
+    /// 判 hard 的每个数字：(答案原文, 维度, 原因)。空表示本轮没有硬失败。
+    pub hard_details: Vec<(String, String, Option<String>)>,
+}
+
+pub(crate) fn guard_outcome(
     req: &AskRequest,
     facts: &ResearchFacts,
     panel: &DecisionPanel,
     draft: &str,
-) -> GuardView {
+) -> GuardOutcome {
     let registry = build_facts_registry(&RegistrySources {
         ticker: &req.ticker,
         native_currency: req
@@ -913,13 +984,28 @@ pub(crate) fn guard_view(
         ..Default::default()
     });
     let report = verify_answer_numbers(draft, &registry);
-    GuardView {
-        total: report.checked.len(),
-        pass: report.pass_count(),
-        soft: report.soft_count,
-        hard: report.hard_count,
-        has_hard_fail: report.has_hard_fail(),
-        soft_note: build_soft_note(&report),
+    let hard_details = report
+        .checked
+        .iter()
+        .filter(|checked| checked.verdict == Verdict::Hard)
+        .map(|checked| {
+            (
+                checked.raw.clone(),
+                checked.dimension.to_string(),
+                checked.reason.clone(),
+            )
+        })
+        .collect();
+    GuardOutcome {
+        view: GuardView {
+            total: report.checked.len(),
+            pass: report.pass_count(),
+            soft: report.soft_count,
+            hard: report.hard_count,
+            has_hard_fail: report.has_hard_fail(),
+            soft_note: build_soft_note(&report),
+        },
+        hard_details,
     }
 }
 
@@ -1189,6 +1275,8 @@ mod tests {
         evidence: Vec<Evidence>,
         /// `load_web_evidence` 被调用次数——测多维检索广度（deep 多次、其余一次）。
         evidence_calls: std::sync::atomic::AtomicUsize,
+        /// 落进质量底账的护栏审计——用来证明每条作答链路都真的记了账。
+        guard_audits: Mutex<Vec<GuardAuditRecord>>,
     }
 
     impl ResearchPorts for FakePorts {
@@ -1208,6 +1296,10 @@ mod tests {
             } else {
                 Err("unavailable".into())
             }
+        }
+
+        async fn record_guard_audit(&self, audit: GuardAuditRecord) {
+            self.guard_audits.lock().unwrap().push(audit);
         }
 
         async fn load_fundamentals(&self, ticker: &str) -> Option<LoadedFundamentals> {
@@ -1355,6 +1447,52 @@ mod tests {
         assert!(outcome.response.fact_guard.is_some());
         assert!(outcome.persisted);
         assert_eq!(outcome.route.intent.as_str(), "valuation");
+    }
+
+    /// 护栏算了就必须记账。护栏是研究质量的唯一量化信号，只在当轮弹个提示、不落底账，
+    /// 就没法回答"换了提示词之后硬失败率是升是降"——这正是它冻结了很久的原因。
+    #[tokio::test]
+    async fn every_answer_path_records_a_guard_audit() {
+        let ports = FakePorts {
+            answer: Some("现价约 190 美元。".into()),
+            ..FakePorts::default()
+        };
+        let req = AskRequest {
+            question: "估值怎么样".into(),
+            ticker: "AAPL".into(),
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let outcome = ResearchService::ask(&ports, "user-1", req).await;
+        let audits = ports.guard_audits.lock().expect("lock");
+        assert_eq!(audits.len(), 1, "非流式作答必须记一条护栏审计");
+        assert_eq!(audits[0].ticker, "AAPL");
+        assert_eq!(audits[0].mode, "ask");
+        assert_eq!(
+            audits[0].outcome.view.total,
+            outcome
+                .response
+                .fact_guard
+                .as_ref()
+                .expect("fact guard")
+                .total,
+            "落账的计数必须和返回给前端的视图同源，否则两边永远对不上"
+        );
+    }
+
+    /// 没有作答就没有可核的数字——这时记一条"全 0"的审计会污染硬失败率的分母。
+    #[tokio::test]
+    async fn unavailable_answer_records_no_guard_audit() {
+        let ports = FakePorts::default();
+        let req = AskRequest {
+            question: "估值怎么样".into(),
+            ticker: "AAPL".into(),
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let outcome = ResearchService::ask(&ports, "user-1", req).await;
+        assert_eq!(outcome.response.answer_source, AnswerSource::Unavailable);
+        assert!(ports.guard_audits.lock().expect("lock").is_empty());
     }
 
     #[tokio::test]
@@ -1974,5 +2112,36 @@ mod tests {
             .expect("auto section")
             .1;
         assert!(!auto.contains("18.5"));
+    }
+
+    /// 定性研究里，模型经常忘了写 `[1]` 这样的来源号。那是引用完整性的软提示，
+    /// 不是"这段判断是错的"——此前却被当成硬条件，导致最该积累记忆的定性研究
+    /// 永远存不下任何论点。
+    #[tokio::test]
+    async fn uncited_qualitative_answer_still_accumulates_memory() {
+        let ports = FakePorts {
+            evidence: vec![Evidence {
+                title: "苹果服务业务季度回顾".into(),
+                url: "https://example.com/aapl-services".into(),
+                snippet: "服务收入占比继续提升。".into(),
+                ..Default::default()
+            }],
+            // 一个来源号都不标——ungrounded 成立，但没有任何硬失败。
+            answer: Some("生态粘性仍强，服务业务是后续观察重点。".into()),
+            ..Default::default()
+        };
+        let req = AskRequest::minimal("苹果的护城河还成立吗", "AAPL");
+        let outcome = ResearchService::ask(&ports, "u", req).await;
+        let citation = outcome
+            .response
+            .citation_guard
+            .expect("有证据就该有引用护栏");
+        assert!(citation.ungrounded, "本轮确实一个来源号都没标");
+        assert!(!citation.has_hard_fail, "没有虚构来源号");
+        assert_eq!(
+            ports.saved_memories.lock().expect("lock").len(),
+            1,
+            "软信号不得拦住记忆沉淀"
+        );
     }
 }

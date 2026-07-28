@@ -202,8 +202,17 @@
     z-index: 45;
     width: min(300px, 84vw);
     padding: var(--sp-4);
-    background: var(--glass-strong);
+    /* 不透明纸面，不是玻璃。窄屏这层是**覆盖**在研究台之上的整屏面板，原来用
+       --glass-strong（0.9 白）且漏了配套模糊，后面的大标题与答案正文直接透上来，
+       和会话列表叠成一片幽灵字。玻璃适合顶栏那种薄薄一条、内容只是路过；
+       一整屏要逐行读的列表必须自己挡住背景。 */
+    background: var(--paper-raised);
     box-shadow: var(--e-pop);
+  }
+
+  /* 覆盖式抽屉才需要遮罩；宽屏抽屉是常驻栏，不遮任何东西。 */
+  .sidebar-scrim {
+    display: block;
   }
 
   .research-sidebar:not(.is-collapsed) .sidebar-new b {
@@ -228,12 +237,8 @@
     padding: 0 var(--sp-4);
   }
 
-  .message.user .bubble {
+  .message.user > .bubble-text {
     max-width: 94%;
-  }
-
-  .assistant-bubble > .answer-card {
-    padding: var(--sp-5);
   }
 
   .val-bands {

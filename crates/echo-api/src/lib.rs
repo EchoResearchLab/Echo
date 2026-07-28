@@ -27,8 +27,8 @@ use echo_application::model_gateway::{
 use echo_application::{
     AuthError, AuthService, CompanyMemory, CompanyMemoryUpdate, CompanyResolvePorts,
     CompanyResolveService, DbCompanyHit, ExternalSymbolHit, FactRecovery, FactRecoveryRequest,
-    LoadedFundamentals, PersistResearchSession, PriorTurn, ReportService, ResearchGap,
-    ResearchPorts, ResearchService, ResolvedCompany, WatchRuleError, WatchRuleService,
+    GuardAuditRecord, LoadedFundamentals, PersistResearchSession, PriorTurn, ReportService,
+    ResearchGap, ResearchPorts, ResearchService, ResolvedCompany, WatchRuleError, WatchRuleService,
     market_snapshot_from_rows, resolved_company_from_rows,
 };
 use echo_config::ApiConfig;
@@ -56,10 +56,10 @@ use echo_data::{
 };
 use echo_db::{
     AuthRepository, CompanyProfileRepository, CompanyProfileUpsert, CompanyRepository,
-    HkFinancialsRepository, HkFinancialsRow, MarketRepository, NotificationsRepository, Pool,
-    PortfolioRepository, PortfolioUpsert, PreferencesPatch, PreferencesRepository,
-    RateLimitRepository, ResearchSessionRepository, SaveResearchSession, UserPreferencesRow,
-    WatchlistRepository,
+    FactGuardAuditEntry, FactGuardAuditRepository, FactGuardHardDetail, HkFinancialsRepository,
+    HkFinancialsRow, MarketRepository, NotificationsRepository, Pool, PortfolioRepository,
+    PortfolioUpsert, PreferencesPatch, PreferencesRepository, RateLimitRepository,
+    ResearchSessionRepository, SaveResearchSession, UserPreferencesRow, WatchlistRepository,
 };
 use echo_domain::{
     EarningsCalendar, Evidence, Filing, Financials, HistoricalValuation, MarketSnapshot,
@@ -1692,6 +1692,35 @@ impl ResearchPorts for ApiResearchPorts {
             .save(user_id, &save)
             .await
             .map_err(|error| error.to_string())
+    }
+
+    /// 护栏审计是观测通路：无库或写失败只记日志，绝不让研究本身因此失败或变慢——
+    /// 用户问的问题已经答完了，记不上账是我们的问题，不是他的。
+    async fn record_guard_audit(&self, audit: GuardAuditRecord) {
+        let Some(pool) = &self.state.pool else {
+            return;
+        };
+        let entry = FactGuardAuditEntry {
+            ticker: Some(audit.ticker),
+            mode: audit.mode.to_string(),
+            total: i32::try_from(audit.outcome.view.total).unwrap_or(i32::MAX),
+            pass_count: i32::try_from(audit.outcome.view.pass).unwrap_or(i32::MAX),
+            soft_count: i32::try_from(audit.outcome.view.soft).unwrap_or(i32::MAX),
+            hard_count: i32::try_from(audit.outcome.view.hard).unwrap_or(i32::MAX),
+            hard_details: audit
+                .outcome
+                .hard_details
+                .into_iter()
+                .map(|(raw, dimension, reason)| FactGuardHardDetail {
+                    raw,
+                    dimension,
+                    reason,
+                })
+                .collect(),
+        };
+        if let Err(error) = FactGuardAuditRepository::new(pool).record(&entry).await {
+            tracing::warn!(%error, "护栏审计落库失败");
+        }
     }
 
     async fn load_prior_turns(&self, user_id: &str, session_id: &str) -> Vec<PriorTurn> {
