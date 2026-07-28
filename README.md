@@ -70,15 +70,17 @@ cargo xtask e2e   # 已启动 API、Trunk 和 chromedriver/geckodriver 时
 
 | 目录 | 职责 |
 | --- | --- |
-| `crates/finance-core` | 定点金融算术内核（Money / Decimal 不变量） |
-| `crates/echo-domain` | 纯规则：意图路由、估值、财务衍生、数字护栏 |
-| `crates/echo-application` | 研究用例编排：取数 → 估值 → 生成 → 护栏 → 落库 |
-| `crates/echo-data` | 唯一外部供应商入口：授权门、质量门、熔断 |
-| `crates/echo-db` | 唯一数据库入口：sqlx 仓储、迁移、RLS、通知咽喉 |
-| `crates/echo-api` | axum HTTP/SSE 边界与认证 |
-| `crates/echo-worker` | 可恢复后台活动（九类 cron） |
-| `crates/echo-web` | Leptos/WASM 前端 |
-| `crates/echo-e2e` | Rust WebDriver 浏览器验收 |
+| `crates/frontend/echo-web` | 前端：Leptos/WASM 单页 |
+| `crates/backend/echo-api` | 后端：axum HTTP/SSE 边界与认证 |
+| `crates/backend/echo-worker` | 后端：可恢复后台活动（九类 cron） |
+| `crates/agent/echo-application` | 研究智能体：取数 → 估值 → 生成 → 护栏 → 落库 |
+| `crates/database/echo-db` | 唯一数据库入口：sqlx 仓储、迁移、RLS、通知咽喉 |
+| `crates/datasource/echo-data` | 唯一外部供应商入口：授权门、质量门、熔断 |
+| `crates/core/echo-domain` | 纯规则：意图路由、估值、财务衍生、数字护栏 |
+| `crates/core/finance-core` | 定点金融算术内核（Money / Decimal 不变量） |
+| `crates/core/echo-contracts` | HTTP 与 WASM 共用的 serde 契约 |
+| `crates/platform/*` | 工程底座：环境配置、tracing/OTLP |
+| `crates/qa/echo-e2e` | Rust WebDriver 浏览器验收 |
 | `docs/` | 计划与架构底账（PLAN）、架构说明、QA 语料 |
 
 ## 文档

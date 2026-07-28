@@ -55,7 +55,7 @@ cargo xtask e2e       # API、Trunk、WebDriver 已启动时
 
 `cargo xtask frozen` 拦本仓库的头号缺陷——**写好了没人调**。它检查两件事，编译器永远不会替我们检查：
 
-1. `migrations/` 里建了且未 drop 的活表，必须在某个 crate 的 Rust 源码里出现。
+1. `crates/database/migrations/` 里建了且未 drop 的活表，必须在某个 crate 的 Rust 源码里出现。
 2. `echo-api` 注册的 `/api/...` 路由，必须有 `echo-web`（或 `echo-e2e`）侧的调用方。
 
 两者都可以豁免，但豁免必须显式登记在 `docs/qa/frozen-registry.json` 并写清理由与去向。登记表是双向的：**登记了却其实已经接线的条目同样判失败**，所以这张表只会缩短，不会变成永久赦免书。`_archive_*` 存档表按定义跳过。
@@ -109,6 +109,15 @@ cargo test -p echo-domain --test intent_routing_corpus
 - **示例卡动作对齐**：`.company-card` 原来 `align-content: start` 把三行全顶到上边，问题只有一行的卡分隔线与箭头比邻居高出一整行。改 `grid-template-rows: auto 1fr auto`，同一排的动作永远排在同一条线上。
 - **空态不再指使用户点不存在的东西**：七处空态共用同一句「完成上方操作后，内容会出现在这里。」，但通知与触发记录是系统跑出来的，上方没有任何操作。`empty_view` 增加 `hint` 参数，逐处说清"这里的内容从哪来"。
 - **写死颜色清理**：`.primary-button.is-danger:active` 的 `#7a170f` 深色下没有对应值——hover 变亮、按下却掉进看不见的暗红，交互逻辑反了；补 `--danger-active`。设置页 sticky 保存条的渐变起点 `rgba(245,245,247,0)` 是浅色专用值，改 `transparent`。
+
+## 2026-07-28 工程治理与对话中心化
+
+- **目录按层重组**：`crates/` 第一层从十二个平铺的 `echo-*` 改成 `frontend / backend / agent / database / datasource / core / platform / qa`——`ls crates/` 直接回答"前端在哪、后端在哪、数据库在哪、agent 在哪"。包名全部保持不变，`cargo run -p echo-api`、`use echo_domain::…` 照旧，这次只动文件位置。`migrations/` 一并收进 `crates/database/`，它本来就是数据库层的一部分。
+- **相对路径改为向上查找**：意图路由语料原来写死 `../../docs/qa/fixtures/`，crate 一挪就静默失效（这次即被它绊住）。改成从 crate 目录向上找仓库根，以后再重组不会重演。
+- **对话中心化**：编辑器上的股票代码标签（`.composer-context`）与占位符里的代码一并去掉。主体由服务端从问题文本识别，是对话的内部状态，把它当标签挂在输入框上会让人以为必须先"选对主体"才能提问。
+- **动画**：思考态高光原来逆着阅读方向从右扫到左（背景定位百分比的位移系数为负，`-130% → 130%` 得到的正是反向），改为从左到右；页面切换改 `translate3d` + `ease-emph` + `dur-4`，并去掉页头与内容之间 60ms 的错峰——同一屏内容分两次起跳正是抖动来源。
+- **仓库清理**：删除与本项目无关的三七互娱品牌 logo（`assets/`）、`echo-clean.tar.gz`、散落的 `.DS_Store`，以及早先误提交的 0 字节文件 `div`。
+- **CLAUDE.md 重写**：补上分层表、冻结门禁与"研究以对话为中心"这条产品不变量；交付门禁统一到 `cargo xtask release`（它已内含冻结检查，CI 也走这一条）。
 
 ## 后续增强（不改变单栈边界）
 

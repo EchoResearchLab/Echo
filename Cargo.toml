@@ -1,32 +1,32 @@
 [workspace]
 resolver = "3"
 members = [
-    # Cargo 单入口工程任务（check / web / e2e / migrate / release）。
+    # 工程任务单入口（check / web / e2e / migrate / frozen / release）。
     "xtask",
-    # 金融定点算术内核（Money / Decimal，二进制浮点只允许出现在展示边界）
-    "crates/finance-core",
-    # HTTP 与 WASM 共用的 serde 契约（请求/响应只定义一次）。
-    "crates/echo-contracts",
-    # 服务端环境配置单一入口；业务 crate 不直接散读环境变量。
-    "crates/echo-config",
-    # Rust 原生日志与追踪初始化。
-    "crates/echo-observability",
-    # 纯领域逻辑：估值、数字护栏、意图路由与财务衍生。
-    "crates/echo-domain",
-    # 用例编排：研究链路（取数 → 估值 → 作答 → 护栏 → 落库）
-    "crates/echo-application",
-    # 持久化与租户 RLS（sqlx + PostgreSQL）
-    "crates/echo-db",
-    # 数据源授权、质量门、熔断与外部适配器；所有 HTTP 取数只从这里出入口。
-    "crates/echo-data",
-    # HTTP/SSE 边界（axum）与认证路由。
-    "crates/echo-api",
-    # 后台工作流（业绩复盘、证伪巡检）与可恢复调度。
-    "crates/echo-worker",
-    # 前端（Leptos/WASM）。
-    "crates/echo-web",
-    # 浏览器验收：Rust WebDriver 客户端，测试真实 Leptos 页面和核心交互。
-    "crates/echo-e2e",
+
+    # ── core：纯内核，不碰 IO ────────────────────────────────────────────
+    "crates/core/finance-core",      # 定点金融算术（Money / Decimal）
+    "crates/core/echo-contracts",    # HTTP 与 WASM 共用的 serde 契约
+    "crates/core/echo-domain",       # 研究规则：意图路由 · 估值 · 数字护栏
+
+    # ── platform：工程底座 ──────────────────────────────────────────────
+    "crates/platform/echo-config",         # 服务端环境配置唯一入口
+    "crates/platform/echo-observability",  # tracing / OTLP 初始化
+
+    # ── agent：研究智能体 ───────────────────────────────────────────────
+    "crates/agent/echo-application", # 编排 · 提示词 · 模型网关 · 研究记忆
+
+    # ── database / datasource：两个唯一出入口 ───────────────────────────
+    "crates/database/echo-db",       # 持久化与多租户 RLS（sqlx）
+    "crates/datasource/echo-data",   # 外部供应商路由 · 授权门 · 熔断
+
+    # ── backend / frontend ─────────────────────────────────────────────
+    "crates/backend/echo-api",       # axum HTTP/SSE 与认证
+    "crates/backend/echo-worker",    # 后台作业与可恢复调度
+    "crates/frontend/echo-web",      # Leptos/WASM 单页
+
+    # ── qa ─────────────────────────────────────────────────────────────
+    "crates/qa/echo-e2e",            # Rust WebDriver 浏览器验收
 ]
 
 [workspace.package]
@@ -38,14 +38,14 @@ authors = ["Echo Research"]
 # 集中依赖底账：版本只在这里钉一次，各 crate 用 `dep.workspace = true` 继承，
 # 避免同一依赖在多个 crate 里漂移出不同版本（工作区级单一事实源）。
 [workspace.dependencies]
-echo-finance-core = { path = "crates/finance-core" }
-echo-contracts = { path = "crates/echo-contracts" }
-echo-config = { path = "crates/echo-config" }
-echo-observability = { path = "crates/echo-observability" }
-echo-domain = { path = "crates/echo-domain" }
-echo-application = { path = "crates/echo-application" }
-echo-db = { path = "crates/echo-db" }
-echo-data = { path = "crates/echo-data" }
+echo-finance-core = { path = "crates/core/finance-core" }
+echo-contracts = { path = "crates/core/echo-contracts" }
+echo-config = { path = "crates/platform/echo-config" }
+echo-observability = { path = "crates/platform/echo-observability" }
+echo-domain = { path = "crates/core/echo-domain" }
+echo-application = { path = "crates/agent/echo-application" }
+echo-db = { path = "crates/database/echo-db" }
+echo-data = { path = "crates/datasource/echo-data" }
 
 rust_decimal = { version = "1.36", default-features = false, features = ["serde", "std"] }
 rust_decimal_macros = "1.36"

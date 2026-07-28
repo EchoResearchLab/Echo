@@ -548,28 +548,30 @@
    block——它内部所有 position: fixed 就不再相对视口，而是相对舞台。窄屏的历史抽屉
    因此整体下坠 52px，顶栏与抽屉之间露出一条谁也没遮住的缝。
    这里的 `to` 本来就等于元素的静止态，不需要 forwards 去保持；改成 backwards 只留
-   进场前的那一帧，动画一结束 transform 就彻底消失，视觉完全不变。 */
+   进场前的那一帧，动画一结束 transform 就彻底消失，视觉完全不变。
+
+   丝滑的三个来源，缺一个就会"抖"：
+   1. translate3d 而不是 translateY——整页提升到独立合成层，文字在位移过程中不再
+      逐帧重新光栅化（那正是切页时看到的细微抖动与字重跳变）。
+   2. ease-emph（0.16,1,0.3,1）配 dur-4：起步快、尾巴长而缓，落位是"停稳"不是"刹停"。
+      原来 dur-3 + ease-out 太短，眼睛只捕捉到一次跳变，读成闪。
+   3. 页头与内容同时进场。原来给内容加 60ms 延迟想做"两段"，实际是同一屏内容分两次
+      起跳，正是用户说的抖动来源。 */
 .workspace-stage > * {
   min-width: 0;
   min-height: 0;
-  animation: stageEnter var(--dur-3) var(--ease-out) backwards;
+  animation: stageEnter var(--dur-4) var(--ease-emph) backwards;
 }
 
 @keyframes stageEnter {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translate3d(0, 8px, 0);
   }
   to {
     opacity: 1;
-    transform: none;
+    transform: translate3d(0, 0, 0);
   }
-}
-
-/* 资料库/设置是「页头 + 内容」两个兄弟，逐个进场会让副标题追着标题跑。
-   给内容一点延迟，让页头先落位——两段而不是两次。 */
-.workspace-stage > .page-header + .page-content {
-  animation-delay: 60ms;
 }
 
 .page-content {
