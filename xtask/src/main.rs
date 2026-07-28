@@ -74,7 +74,7 @@ fn rust_checks(root: &Path) -> TaskResult {
 }
 
 fn web_build(root: &Path, release: bool) -> TaskResult {
-    let web = root.join("crates/echo-web");
+    let web = root.join("crates/frontend/echo-web");
     if release {
         run("trunk", ["build", "--release"], &web)
     } else {

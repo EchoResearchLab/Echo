@@ -585,7 +585,11 @@
     var(--ink-3) 100%
   );
   background-size: 230% 100%;
-  background-position: -130% 50%;
+  /* 高光顺着阅读方向从左扫到右。
+     百分比背景定位的位移是 (容器宽 − 背景宽) × P，这里背景是容器的 2.3 倍，系数为负，
+     所以 P 越小图像越靠右——要让亮带左→右走，P 必须从 130% 递减到 −130%，
+     写成直觉上的 −130% → 130% 得到的恰恰是逆着读的右→左。 */
+  background-position: 130% 50%;
   -webkit-background-clip: text;
   background-clip: text;
   animation: thinkingTextSweep 2.4s linear infinite;
@@ -593,7 +597,7 @@
 
 @keyframes thinkingTextSweep {
   to {
-    background-position: 130% 50%;
+    background-position: -130% 50%;
   }
 }
 
@@ -1580,34 +1584,6 @@
 .composer-panel:focus-within {
   border-color: var(--brand-ring);
   box-shadow: var(--e-2), var(--glass-sheen), 0 0 0 3px var(--brand-ring);
-}
-
-.composer-context {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  grid-column: 1 / -1;
-  padding-bottom: var(--sp-1);
-}
-
-.composer-context > span {
-  width: 7px;
-  height: 7px;
-  border-radius: var(--r-full);
-  background: var(--brand);
-  box-shadow: 0 0 0 4px var(--brand-tint);
-}
-
-.composer-context b {
-  color: var(--brand-ink);
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  font-weight: 650;
-}
-
-.composer-context small {
-  color: var(--ink-4);
-  font-size: var(--fs-11);
 }
 
 .composer textarea {

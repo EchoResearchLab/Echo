@@ -55,9 +55,19 @@ struct Baseline {
     deferred_fields: BTreeMap<&'static str, usize>,
 }
 
+/// 从本 crate 向上找到仓库根（以 `docs/qa/fixtures` 存在为准），再定位语料。
+///
+/// 不写死 `../../`：crate 在仓库里的深度会随目录重组变化，写死的层数会在搬家那天
+/// 静默失效——这次按 前端/后端/agent/数据库 分层时就正好踩中。
 fn corpus_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/qa/fixtures/intent-routing-corpus.json")
+    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    loop {
+        let candidate = dir.join("docs/qa/fixtures/intent-routing-corpus.json");
+        if candidate.exists() {
+            return candidate;
+        }
+        assert!(dir.pop(), "未能从 crate 目录向上找到 docs/qa/fixtures");
+    }
 }
 
 fn load_corpus() -> CorpusFile {

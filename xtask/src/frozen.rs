@@ -3,7 +3,7 @@
 //! 于是数据库里长着一张空表、接口列表里挂着一个死链，而计划底账上却写着"已完成"。
 //!
 //! 这里把三类冻结物做成门禁：
-//!   * **活表**：`migrations/*.sql` 里建了且没被 drop 的表，必须在某个 crate 的 Rust 源码里出现。
+//!   * **活表**：`crates/database/migrations/*.sql` 里建了且没被 drop 的表，必须在某个 crate 的 Rust 源码里出现。
 //!   * **API 路由**：`echo-api` 注册的 `/api/...` 路由，必须有 `echo-web` 侧的调用方。
 //!   * 两者都可以豁免，但豁免必须**显式登记**在 [`REGISTRY_PATH`]，并写清理由与去向。
 //!
@@ -129,7 +129,7 @@ fn load_registry(root: &Path) -> TaskResult<BTreeMap<String, BTreeMap<String, St
 
 /// 从迁移目录还原"当前还活着的表"：建过、且之后没有被 drop。
 fn live_tables(root: &Path) -> TaskResult<BTreeSet<String>> {
-    let dir = root.join("migrations");
+    let dir = root.join("crates/database/migrations");
     let mut files: Vec<_> = std::fs::read_dir(&dir)
         .map_err(|error| format!("读取 {} 失败: {error}", dir.display()))?
         .filter_map(std::result::Result::ok)
@@ -234,12 +234,12 @@ fn check_routes(
     let empty = BTreeMap::new();
     let registered = registered.unwrap_or(&empty);
 
-    let api = std::fs::read_to_string(root.join("crates/echo-api/src/lib.rs"))
+    let api = std::fs::read_to_string(root.join("crates/backend/echo-api/src/lib.rs"))
         .map_err(|error| format!("读取 echo-api/src/lib.rs 失败: {error}"))?;
     let mut web = String::new();
-    collect_rs_into(&root.join("crates/echo-web/src"), &mut web)?;
+    collect_rs_into(&root.join("crates/frontend/echo-web/src"), &mut web)?;
     // E2E 验收也算真实调用方：它替用户点了这条路由。
-    collect_rs_into(&root.join("crates/echo-e2e/src"), &mut web)?;
+    collect_rs_into(&root.join("crates/qa/echo-e2e/src"), &mut web)?;
 
     let mut unregistered = Vec::new();
     let mut stale = Vec::new();

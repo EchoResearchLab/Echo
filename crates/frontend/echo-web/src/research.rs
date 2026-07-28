@@ -1731,8 +1731,9 @@ pub fn ResearchPage(
             </div>
 
             // ── 编辑器（贴底常驻；空态与对话态同一位置，首次提交不跳位）──
-            // 里面只有一个输入框和一个按钮：没有研究对象选择器（主体由服务端识别）、
-            // 没有第二条提交通道、没有快捷键说明和免责小字。
+            // 里面只有一个输入框和一个按钮：没有研究对象选择器、没有股票代码标签、
+            // 没有第二条提交通道、没有快捷键说明和免责小字。主体全程由服务端从问题文本
+            // 识别，是对话的内部状态，不是用户要先填对的一个字段。
             <div class="composer">
                 {move || (has_thread() && !subject.get().is_empty()).then(|| view! {
                     <div class="composer-suggestions" aria-label="快捷追问">
@@ -1748,16 +1749,6 @@ pub fn ResearchPage(
                     </div>
                 })}
                 <div class="composer-panel">
-                    {move || {
-                        let current = subject.get();
-                        (!current.is_empty()).then(|| view! {
-                            <div class="composer-context">
-                                <span aria-hidden="true"></span>
-                                <b>{current}</b>
-                                <small>"当前研究主题"</small>
-                            </div>
-                        })
-                    }}
                     <textarea
                         node_ref=composer_ref
                         prop:value=question
@@ -1774,10 +1765,13 @@ pub fn ResearchPage(
                                 submit();
                             }
                         }
-                        placeholder=move || if subject.get().is_empty() {
-                            "输入公司、代码或你想研究的问题".to_string()
+                        // 提示语里不出现股票代码。研究是以对话为中心的：主体由服务端从
+                        // 问题文本识别并在对话里承接，编辑器不该把内部识别结果当标签挂出来，
+                        // 那会让人以为必须先"选对主体"才能提问。
+                        placeholder=move || if has_thread() {
+                            "继续追问…"
                         } else {
-                            format!("继续追问 {}…", subject.get())
+                            "输入公司、代码或你想研究的问题"
                         }
                         aria-label="研究问题"
                         rows="1"

@@ -4,9 +4,9 @@ Echo 的界面语言服务于一个目标：让复杂研究显得清晰、可信
 
 ## 唯一事实源
 
-设计令牌只定义在 **`crates/echo-web/styles/01-tokens.css` 的单个 `:root` 块**里。组件样式只允许引用令牌，不得写死颜色、间距、时长、圆角。
+设计令牌只定义在 **`crates/frontend/echo-web/styles/01-tokens.css` 的单个 `:root` 块**里。组件样式只允许引用令牌，不得写死颜色、间距、时长、圆角。
 
-样式按层加载（顺序见 `crates/echo-web/index.html`），同一属性只在唯一一层定义：
+样式按层加载（顺序见 `crates/frontend/echo-web/index.html`），同一属性只在唯一一层定义：
 
 | 层 | 文件 | 职责 |
 | --- | --- | --- |
@@ -85,7 +85,7 @@ Echo 的界面语言服务于一个目标：让复杂研究显得清晰、可信
 - 编辑器（研究提问）随内容长高，上限 208px 后内部滚动；`Enter` 发送、`Shift+Enter` 换行；提交后高度收回一行。
 
 ### 图标
-- 全部来自 `crates/echo-web/src/icons.rs` 的 20×20 线性图标集，描边取 `currentColor`，尺寸由 CSS 决定。
+- 全部来自 `crates/frontend/echo-web/src/icons.rs` 的 20×20 线性图标集，描边取 `currentColor`，尺寸由 CSS 决定。
 - **组件内的嵌套结构用直接子代选择器**（`.panel > summary` 而非 `.panel summary`）。后代选择器会捕获面板里任何嵌套的同名元素——估值的逐法明细就曾被证据面板的 `summary` 规则套上 `space-between`，箭头甩到最左、标题甩到最右。
 - 不用字符当图标（`×` `⋮` `★` `↑` 会随系统字体漂移）。**破坏性操作必须用垃圾桶图标**，不得用"更多"语义的 `⋮`。
 - 装饰性图标 `aria-hidden`，语义由外层控件的 `aria-label` 承担。
@@ -96,7 +96,7 @@ Echo 的界面语言服务于一个目标：让复杂研究显得清晰、可信
 - 状态文案用研究语言，不用产品状态词：`完备度 80%` → `主要事实已核到`。读结论的人要知道的是这个判断有多少事实支撑。
 
 ### 破坏性操作
-- 统一走 `crates/echo-web/src/dialog.rs` 的应用内确认对话框（context 注入 + 单一宿主），不用浏览器原生 `window.confirm`。
+- 统一走 `crates/frontend/echo-web/src/dialog.rs` 的应用内确认对话框（context 注入 + 单一宿主），不用浏览器原生 `window.confirm`。
 - 对话框必须说明后果范围（例如"已创建的监控规则不会自动删除"），确认按钮文案描述动作。
 - 支持 Escape 与点击遮罩关闭。
 
@@ -121,7 +121,7 @@ Echo 的界面语言服务于一个目标：让复杂研究显得清晰、可信
 
 ## 展示层格式化
 
-服务端口径与用户可读文本的转换只在 `crates/echo-web/src/format.rs`：
+服务端口径与用户可读文本的转换只在 `crates/frontend/echo-web/src/format.rs`：
 
 - **时间**一律按浏览器本地时区渲染（`7月24日 14:55`）。服务端存 UTC，把 UTC 数字当本地时间显示会把港股盘后写成盘中——这是事实错误，不是排版瑕疵。
 - **原始枚举**（`route.depth` 的 `brief/standard/deep`）与**内部指标名**（`grossMargin`）必须映射成中文；未收录的原样透出，好过显示一个错的中文名。

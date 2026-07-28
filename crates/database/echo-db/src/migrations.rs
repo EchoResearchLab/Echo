@@ -17,55 +17,55 @@ pub struct Migration {
 const MIGRATIONS: &[Migration] = &[
     Migration {
         name: "0001_init.sql",
-        sql: include_str!("../../../migrations/0001_init.sql"),
+        sql: include_str!("../../migrations/0001_init.sql"),
     },
     Migration {
         name: "0002_tenant_rls.sql",
-        sql: include_str!("../../../migrations/0002_tenant_rls.sql"),
+        sql: include_str!("../../migrations/0002_tenant_rls.sql"),
     },
     Migration {
         name: "0003_auth_session_boundary.sql",
-        sql: include_str!("../../../migrations/0003_auth_session_boundary.sql"),
+        sql: include_str!("../../migrations/0003_auth_session_boundary.sql"),
     },
     Migration {
         name: "0004_rate_limit_buckets.sql",
-        sql: include_str!("../../../migrations/0004_rate_limit_buckets.sql"),
+        sql: include_str!("../../migrations/0004_rate_limit_buckets.sql"),
     },
     Migration {
         name: "0005_research_snapshots_daily_unique.sql",
-        sql: include_str!("../../../migrations/0005_research_snapshots_daily_unique.sql"),
+        sql: include_str!("../../migrations/0005_research_snapshots_daily_unique.sql"),
     },
     Migration {
         name: "0006_drop_cn_financials.sql",
-        sql: include_str!("../../../migrations/0006_drop_cn_financials.sql"),
+        sql: include_str!("../../migrations/0006_drop_cn_financials.sql"),
     },
     Migration {
         name: "0007_add_fcf_column.sql",
-        sql: include_str!("../../../migrations/0007_add_fcf_column.sql"),
+        sql: include_str!("../../migrations/0007_add_fcf_column.sql"),
     },
     Migration {
         name: "0008_p4_enhancements.sql",
-        sql: include_str!("../../../migrations/0008_p4_enhancements.sql"),
+        sql: include_str!("../../migrations/0008_p4_enhancements.sql"),
     },
     Migration {
         name: "0009_p5_team_audit_billing.sql",
-        sql: include_str!("../../../migrations/0009_p5_team_audit_billing.sql"),
+        sql: include_str!("../../migrations/0009_p5_team_audit_billing.sql"),
     },
     Migration {
         name: "0010_drop_legacy_instruments.sql",
-        sql: include_str!("../../../migrations/0010_drop_legacy_instruments.sql"),
+        sql: include_str!("../../migrations/0010_drop_legacy_instruments.sql"),
     },
     Migration {
         name: "0011_company_filings.sql",
-        sql: include_str!("../../../migrations/0011_company_filings.sql"),
+        sql: include_str!("../../migrations/0011_company_filings.sql"),
     },
     Migration {
         name: "0012_scheduler_lease.sql",
-        sql: include_str!("../../../migrations/0012_scheduler_lease.sql"),
+        sql: include_str!("../../migrations/0012_scheduler_lease.sql"),
     },
     Migration {
         name: "0013_hk_financial_units.sql",
-        sql: include_str!("../../../migrations/0013_hk_financial_units.sql"),
+        sql: include_str!("../../migrations/0013_hk_financial_units.sql"),
     },
 ];
 
