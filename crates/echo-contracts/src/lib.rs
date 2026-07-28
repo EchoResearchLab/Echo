@@ -143,6 +143,24 @@ pub struct MethodBandView {
     pub bull: Decimal,
 }
 
+/// 研究主体的行情抬头——答案上方"这是哪家公司、现在多少钱"的一行事实。
+/// 每个字段各自可缺：缺什么就不画什么，绝不用 0 或旧值占位。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanyHeaderView {
+    pub ticker: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_percent: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub market_cap: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ValuationView {
@@ -233,6 +251,10 @@ pub struct EvidenceView {
 #[serde(deny_unknown_fields)]
 pub struct AskResponse {
     pub ticker: String,
+    /// 研究主体的行情抬头（名称/现价/涨跌/市值）。缺行情即 `None`——抬头宁可不画，
+    /// 也不用占位数字冒充"已核到"。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company: Option<CompanyHeaderView>,
     pub route: RouteView,
     pub data_completeness: u8,
     pub connected_sources: Vec<String>,
@@ -291,6 +313,10 @@ impl ResearchStreamEvent {
 #[serde(deny_unknown_fields)]
 pub struct ResearchStreamMeta {
     pub ticker: String,
+    /// 行情抬头随 meta 一起到达——取数早于作答，抬头能在第一个 token 之前就位，
+    /// 用户在等答案时先看到"研究的是哪家、现在多少钱"。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub company: Option<CompanyHeaderView>,
     pub route: RouteView,
     pub data_completeness: u8,
     pub connected_sources: Vec<String>,
@@ -409,6 +435,26 @@ pub struct AuthInviteRequest {
 #[serde(deny_unknown_fields)]
 pub struct AuthUserResponse {
     pub user: PublicUser,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSubscription {
+    pub plan_id: String,
+    pub plan_name: String,
+    pub tier: String,
+    pub status: String,
+    pub current_period_end: String,
+    pub max_daily_calls: i32,
+    pub features: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountResponse {
+    pub user: PublicUser,
+    pub subscription: Option<AccountSubscription>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1015,6 +1061,7 @@ mod tests {
     fn research_stream_event_tags_are_stable() {
         let meta = ResearchStreamEvent::Meta(Box::new(ResearchStreamMeta {
             ticker: "AAPL".into(),
+            company: None,
             route: RouteView {
                 intent: "valuation".into(),
                 depth: "brief".into(),

@@ -42,6 +42,14 @@ pub struct HistoricalValuationSummary {
     pub min: Option<Decimal>,
     pub max: Option<Decimal>,
     pub median: Option<Decimal>,
+    /// 四分位——估值 PE 法的熊/牛锚点。刻意不用 `min`/`max`：单个极端月份会毁掉整条带
+    /// （NVDA 五年 PE 的 max 是 465x，落在 AI 周期起点的 EPS 低位上，当牛市情景毫无意义）。
+    pub p25: Option<Decimal>,
+    pub p75: Option<Decimal>,
+    /// 序列最新一点的 PE，与 `min`/`median`/`p25`/`p75` **同口径**（都用当时已知的最近一期
+    /// 年报 EPS）。估值只能用「分位 ÷ latest」这个比值，绝不能把本序列的绝对倍数去乘 TTM EPS：
+    /// 两者 EPS 口径不同，实测 GOOGL 年报口径 29.58x vs TTM 口径 15.88x，差 86%。
+    pub latest: Option<Decimal>,
 }
 
 #[derive(Clone)]
@@ -232,7 +240,11 @@ fn summarize(points: &[HistoricalValuationPointRow]) -> Option<HistoricalValuati
     values.sort();
     let min = values.first().copied();
     let max = values.last().copied();
-    let median = values.get(values.len() / 2).copied();
+    // 与同业锚点共用同一套插值分位，否则同一条 PE 序列会在事实块与估值里给出不同的中位数。
+    let (p25, median, p75) = match crate::stats::quartiles_sorted(&values) {
+        Some((p25, median, p75)) => (Some(p25), Some(median), Some(p75)),
+        None => (None, None, None),
+    };
     // 分位用点位序列里最新一条（`points` 按日期升序）近似"当前"——月度粒度，非当日估值。
     let latest = points.last().and_then(|p| p.pe_value);
     let percentile = latest.map(|latest| {
@@ -244,6 +256,9 @@ fn summarize(points: &[HistoricalValuationPointRow]) -> Option<HistoricalValuati
         min: min.map(round2),
         max: max.map(round2),
         median: median.map(round2),
+        p25: p25.map(round2),
+        p75: p75.map(round2),
+        latest: latest.map(round2),
     })
 }
 

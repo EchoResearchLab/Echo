@@ -16,8 +16,9 @@ mod migrations;
 mod repositories;
 pub use migrations::{Migration, migrate, migration_checksum, migrations};
 pub use repositories::{
-    AuthRepository, AuthSessionRow, CompanyProfileRepository, CompanyProfileRow,
-    CompanyProfileSummaryRow, CompanyProfileUpsert, CompanySearchRow, EarningsCandidateRow,
+    AccountSubscriptionRow, AuthRepository, AuthSessionRow, CompanyProfileRepository,
+    CompanyProfileRow, CompanyProfileSummaryRow, CompanyProfileUpsert, CompanySearchRow,
+    EarningsCandidateRow, FactGuardAuditEntry, FactGuardAuditRepository, FactGuardHardDetail,
     NewNotification, NewUser, NewWatchRule, NotificationRow, NotificationsRepository,
     OperationsRepository, PortfolioPositionRow, PortfolioRepository, PortfolioSnapshotResult,
     PortfolioUpsert, PreferencesPatch, PreferencesRepository, RateLimitRepository,

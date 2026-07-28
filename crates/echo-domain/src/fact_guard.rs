@@ -12,7 +12,7 @@
 //! 与 JS 的实质差异：**零二进制浮点**。选"量级上最接近的事实"原文用 `log10` 距离，这里改用
 //! Decimal 比值 `max(v/f, f/v)` 取最小——同序、且不引入任何浮点（红线 4）。
 
-use crate::valuation::{Financials, MarketSnapshot, Valuation};
+use crate::valuation::{Filing, Financials, MarketSnapshot, PeerAnchor, Valuation};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::{BTreeMap, BTreeSet};
@@ -62,6 +62,10 @@ const AMOUNT_KEYWORDS: &[&str] = &[
     "看空",
     "中性",
     "看多",
+    // 估值区间是现在的主要输出，模型多写成"基准估值区间 234.51"而非登记表里的"估值中性"。
+    // 不收这两个词，裸数字会被整个跳过——连 soft 都不记，等于估值数字完全不受核对。
+    "基准",
+    "估值",
     "市值",
     "收入",
     "营收",
@@ -79,20 +83,6 @@ const AMOUNT_KEYWORDS: &[&str] = &[
     "止损",
     "止盈",
 ];
-
-/// compactNumber() 输出（"3.92 万亿" / "2099.21 亿"）反解析成原始数值。
-#[must_use]
-pub fn parse_compact_amount(s: &str) -> Option<Decimal> {
-    static RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^(-?\d+(?:\.\d+)?)\s*(万亿|亿|万)?$").unwrap());
-    let s = s.trim();
-    let caps = RE.captures(s).ok().flatten()?;
-    let n: Decimal = caps.get(1)?.as_str().parse().ok()?;
-    match caps.get(2).map(|m| m.as_str()) {
-        Some(unit) => cn_unit(unit).map(|u| n * u),
-        None => Some(n),
-    }
-}
 
 /// 展示级近似汇率换算（跟 CNY→HKD=1.08、HKD/USD≈1/7.8 同一套常量）。
 #[must_use]
@@ -192,6 +182,12 @@ impl FactsRegistry {
     }
 }
 
+/// `pct_string` 的逆运算——把 `"-27.8%"` 解回 `-27.8`。估值把空间存成展示字符串，
+/// 登记表要的是数值。解析不出就返回 `None`（不登记好过登错）。
+fn parse_pct(text: Option<&str>) -> Option<Decimal> {
+    text?.trim().trim_end_matches('%').trim().parse().ok()
+}
+
 /// 用户持仓（真实 DB 记录，不用自由文本）。
 #[derive(Clone, Debug, Default)]
 pub struct Position {
@@ -208,7 +204,13 @@ pub struct RegistrySources<'a> {
     pub market: Option<&'a MarketSnapshot>,
     pub financials: Option<&'a Financials>,
     pub valuation: Option<&'a Valuation>,
+    /// 同业倍数在估值失败的降级路径也会直接喂给模型，必须先登记才能允许原样引用。
+    pub peer_anchor: Option<&'a PeerAnchor>,
     pub earnings_next_date: Option<&'a str>,
+    /// 本轮喂给模型的公司公告。事实块明写"可引用表单类型与日期"，登记表就必须收下这些
+    /// 日期——否则模型照着引用反被判"日期查无"的硬失败（实测 AAPL 引用 10-Q 2026-05-01
+    /// 即如此）。这是本文件反复出现的同一条教训：喂出去的每个数字都要能核。
+    pub filings: &'a [Filing],
     pub position: Option<&'a Position>,
 }
 
@@ -272,7 +274,6 @@ pub fn build_facts_registry(sources: &RegistrySources) -> FactsRegistry {
         reg.push_percent(f.return_on_equity, "ROE", "financialsData");
         reg.push_percent(f.return_on_assets, "ROA", "financialsData");
         reg.push_multiple(f.pe, "PE", "financialsData");
-        reg.push_multiple(f.forward_pe, "Forward PE", "financialsData");
         reg.push_multiple(f.pb, "PB", "financialsData");
         reg.push_date(f.period.as_deref(), "财报期", "financialsData.period");
 
@@ -310,29 +311,50 @@ pub fn build_facts_registry(sources: &RegistrySources) -> FactsRegistry {
                 "financialsData.hkBuybacks",
             );
         }
-        // F-5 历史估值分位：分位/区间先登记再允许被引用。
-        if let Some(hv) = &f.historical_valuation {
-            reg.push_percent(
-                hv.percentile,
-                "历史估值分位",
-                "financialsData.historicalValuation",
-            );
-            reg.push_multiple(
-                hv.min,
-                "历史PE区间低值",
-                "financialsData.historicalValuation",
-            );
-            reg.push_multiple(
-                hv.max,
-                "历史PE区间高值",
-                "financialsData.historicalValuation",
-            );
-            reg.push_multiple(
-                hv.median,
-                "历史PE中位",
-                "financialsData.historicalValuation",
-            );
-        }
+    }
+
+    // F-5 历史估值分位——**刻意在三表 `provider_ok` 门控之外**。它来自历史行情 + 年报 EPS，
+    // 与当季三表能否取到毫无关系：三表 429/缺源时这段分位照样有值，事实块也照样把它喂给
+    // 模型（那一段同样不受 provider_ok 约束）。此前登记被门控挡住，于是模型如实照抄分位却
+    // 全被判失败——正是本文件上方那条"喂给模型的数字必须先登记"的 F-4a 教训再犯一次。
+    // p25/p75/latest 是估值「历史 PE 分位」法的锚点，与 min/max/median 一并登记。
+    if let Some(hv) = sources
+        .financials
+        .and_then(|f| f.historical_valuation.as_ref())
+    {
+        reg.push_percent(
+            hv.percentile,
+            "历史估值分位",
+            "financialsData.historicalValuation",
+        );
+        reg.push_multiple(
+            hv.min,
+            "历史PE区间低值",
+            "financialsData.historicalValuation",
+        );
+        reg.push_multiple(
+            hv.max,
+            "历史PE区间高值",
+            "financialsData.historicalValuation",
+        );
+        reg.push_multiple(
+            hv.median,
+            "历史PE中位",
+            "financialsData.historicalValuation",
+        );
+        reg.push_multiple(hv.p25, "历史PE p25", "financialsData.historicalValuation");
+        reg.push_multiple(hv.p75, "历史PE p75", "financialsData.historicalValuation");
+        reg.push_multiple(
+            hv.latest,
+            "历史PE当前倍数",
+            "financialsData.historicalValuation",
+        );
+    }
+
+    if let Some(peer) = sources.peer_anchor {
+        reg.push_multiple(Some(peer.p25), "同业倍数 p25", "peerAnchor");
+        reg.push_multiple(Some(peer.median), "同业倍数中位", "peerAnchor");
+        reg.push_multiple(Some(peer.p75), "同业倍数 p75", "peerAnchor");
     }
 
     // 估值输出：次优先级——自己的确定性计算，可信但排在原始事实之后。
@@ -345,6 +367,14 @@ pub fn build_facts_registry(sources: &RegistrySources) -> FactsRegistry {
         reg.push_amount(v.base, nc, "估值中性", "valuation");
         reg.push_amount(v.bull, nc, "估值看多", "valuation");
         reg.push_amount(v.current_price, nc, "现价", "valuation");
+        // 相对现价空间同样出现在事实块的估值行里，必须登记。它通常为负（估值低于现价 =
+        // 这股票贵），而百分比桶里其余多是正值，漏登时模型如实引用会被判"符号相反"的硬失败。
+        reg.push_percent(parse_pct(v.upside.as_deref()), "估值空间", "valuation");
+        reg.push_percent(
+            parse_pct(v.downside.as_deref()),
+            "估值下行空间",
+            "valuation",
+        );
         // 赔率刻意不进 multiples 桶（与 PE/EV-Sales 完全不同尺度，会造成误报）。
         for m in &v.method_detail {
             reg.push_amount(
@@ -369,6 +399,13 @@ pub fn build_facts_registry(sources: &RegistrySources) -> FactsRegistry {
     }
 
     // 财报日历。
+    for filing in sources.filings {
+        reg.push_date(
+            filing.filed_date.as_deref(),
+            &format!("{} 公告日", filing.form),
+            "filings",
+        );
+    }
     if let Some(next) = sources.earnings_next_date {
         reg.push_date(Some(next), "下一业绩日", "earnings");
     }
@@ -807,6 +844,165 @@ fn match_in_bucket(value: Decimal, bucket: &[Fact], tol: &Tol) -> MatchResult {
     }
 }
 
+/// 正文里点名口径的说法 → 登记表标签里必然出现的关键词。
+///
+/// 只收**同维度里彼此容易互串**的口径：毛利率/经营利润率/净利率是同一张利润表上三个
+/// 逐级收窄的比率，PE/PB 是同一只票上两个不同分母的倍数——模型串的就是这些，而不是把
+/// 股息率写成 ROE。
+const METRIC_HINTS: &[(&str, &str)] = &[
+    ("毛利率", "毛利率"),
+    ("净利润率", "净利率"),
+    ("净利率", "净利率"),
+    ("经营利润率", "经营利润率"),
+    ("营业利润率", "经营利润率"),
+    ("营运利润率", "经营利润率"),
+    ("股息率", "股息率"),
+    ("净资产收益率", "ROE"),
+    ("ROE", "ROE"),
+    ("总资产收益率", "ROA"),
+    ("ROA", "ROA"),
+    ("收入增速", "收入增速"),
+    ("营收增速", "收入增速"),
+    ("收入增长", "收入增速"),
+    ("营收增长", "收入增速"),
+    ("收入同比", "收入增速"),
+    ("营收同比", "收入增速"),
+    ("利润增速", "利润增速"),
+    ("利润增长", "利润增速"),
+    ("利润同比", "利润增速"),
+    ("市盈率", "PE"),
+    ("PE", "PE"),
+    ("市净率", "PB"),
+    ("PB", "PB"),
+];
+
+/// 窗口里出现这些词，说明该数字讲的不是"本公司当期的这条口径"——要么换了时间
+/// （历史值、对比值），要么换了主体（同业、行业、竞品）。登记表只登本公司当期，
+/// 拿"它对不上当期"当错，就会把「毛利率从 40% 提升到 45%」里的 40%、
+/// 「同业净利率约 45%」整句判死。宁可退回原逻辑漏报，也不误报。
+const SCOPE_SHIFT_MARKERS: &[&str] = &[
+    // 换时间
+    "从",
+    "去年",
+    "上年",
+    "同期",
+    "此前",
+    "曾",
+    "上季",
+    "前值",
+    "历史上",
+    "当年",
+    // 换主体
+    "同业",
+    "行业",
+    "对手",
+    "竞品",
+    "可比",
+    "板块",
+    "平均",
+    "中位",
+];
+
+/// 往前看多少字符找口径词。太短接不住「毛利率（不含内容成本）45%」，太长会跨过整句。
+const HINT_WINDOW_CHARS: usize = 14;
+
+/// 找出这个数字**被正文点名**的口径。找不到返回 `None`，此时回退成原来的按桶匹配。
+fn metric_hint(text: &str, index: usize) -> Option<&'static str> {
+    let before = chars_before(text, index, HINT_WINDOW_CHARS);
+    // 句号之外的口径词属于上一句，与这个数字无关。
+    let window = before
+        .rsplit(['。', '！', '？', '\n', '；', ';'])
+        .next()
+        .unwrap_or(&before)
+        .to_uppercase();
+
+    let mut best: Option<(usize, &'static str)> = None;
+    for (surface, label) in METRIC_HINTS {
+        let Some(at) = window.rfind(surface) else {
+            continue;
+        };
+        // "PEG"/"PBR" 不是 PE/PB——ASCII 口径词后面还跟着字母就不算命中。
+        if surface.is_ascii()
+            && window[at + surface.len()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric())
+        {
+            continue;
+        }
+        // 离数字最近的那个口径才是它的口径（"毛利率 45%、净利率 25%" 里 25% 归净利率）。
+        if best.is_none_or(|(prev, _)| at > prev) {
+            best = Some((at, label));
+        }
+    }
+
+    let (_, label) = best?;
+    // 整个窗口都要看，不能只看口径词之后：「去年毛利率 40%」的时间词、「同业净利率 45%」的
+    // 主语，都出现在口径词**之前**。
+    if SCOPE_SHIFT_MARKERS
+        .iter()
+        .any(|marker| window.contains(marker))
+    {
+        return None;
+    }
+    Some(label)
+}
+
+/// 带口径的桶内匹配。
+///
+/// 原来的 [`match_in_bucket`] 只问"这个数字是不是桶里**某条**事实"——于是「净利率 45%」
+/// 在毛利率恰好是 45% 时照样 Pass，护栏对口径错误完全无感（这是它长期的头号盲区：
+/// 数字个个都对，说法全错）。这里先按正文点名的口径缩小到同名事实；数字对不上同名事实、
+/// 却正好等于另一条口径的真值时，判 **hard**——那不是"没核到"，是把 A 的数说成了 B 的。
+///
+/// 其余情况一律退回原逻辑，不新增任何误报面。
+fn match_in_bucket_with_metric(
+    value: Decimal,
+    bucket: &[Fact],
+    tol: &Tol,
+    metric: Option<&str>,
+) -> MatchResult {
+    let Some(metric) = metric else {
+        return match_in_bucket(value, bucket, tol);
+    };
+    let within = |fact: &Fact| abs(value - fact.value) <= tol.abs.max(abs(fact.value) * tol.rel);
+    // 标签用包含而不是相等：口径 PE 要能认下"历史PE p25"这类同口径的衍生事实，
+    // 否则引用历史分位会被自己判成错配。
+    let mut named = bucket
+        .iter()
+        .filter(|fact| fact.label.contains(metric))
+        .peekable();
+    if named.peek().is_none() {
+        return match_in_bucket(value, bucket, tol);
+    }
+    if let Some(fact) = named.clone().find(|fact| within(fact)) {
+        return MatchResult {
+            verdict: Verdict::Pass,
+            fact: Some((fact.label.clone(), fact.value)),
+            reason: None,
+        };
+    }
+    if let Some(other) = bucket
+        .iter()
+        .find(|fact| !fact.label.contains(metric) && within(fact))
+    {
+        let registered = named
+            .map(|fact| format!("{}={}", fact.label, fact.value.normalize()))
+            .collect::<Vec<_>>()
+            .join("、");
+        return MatchResult {
+            verdict: Verdict::Hard,
+            fact: Some((other.label.clone(), other.value)),
+            reason: Some(format!(
+                "口径错配：文中称是{metric}（登记为 {registered}），但这个数字是\"{}\"={}",
+                other.label,
+                other.value.normalize()
+            )),
+        };
+    }
+    match_in_bucket(value, bucket, tol)
+}
+
 fn percent_tol() -> Tol {
     Tol {
         rel: dec!(0),
@@ -1012,13 +1208,23 @@ pub fn verify_answer_numbers(text: &str, reg: &FactsRegistry) -> VerifyReport {
             }
         }
         let (dimension, result) = match &cand {
-            Candidate::Percent { value, .. } => (
+            Candidate::Percent { value, index, .. } => (
                 "percent",
-                match_in_bucket(*value, &reg.percents, &percent_tol()),
+                match_in_bucket_with_metric(
+                    *value,
+                    &reg.percents,
+                    &percent_tol(),
+                    metric_hint(scan_text, *index),
+                ),
             ),
-            Candidate::Multiple { value, .. } => (
+            Candidate::Multiple { value, index, .. } => (
                 "multiple",
-                match_in_bucket(*value, &reg.multiples, &multiple_tol()),
+                match_in_bucket_with_metric(
+                    *value,
+                    &reg.multiples,
+                    &multiple_tol(),
+                    metric_hint(scan_text, *index),
+                ),
             ),
             Candidate::Amount {
                 value, currency, ..
@@ -1176,7 +1382,108 @@ pub fn render_hard_fail_issues(report: &VerifyReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::valuation::Financials;
+    use crate::valuation::{Financials, HistoricalValuation};
+
+    /// 历史 PE 分位来自历史行情 + 年报 EPS，与当季三表是两条独立管线。三表 429/缺源时
+    /// （`provider_ok=false`）事实块照样把分位喂给模型，登记表就必须照样收录——否则模型
+    /// 如实照抄反被判失败。这是估值区间上线后暴露的真实故障（AAPL 一度 0 过 / 4 核）。
+    #[test]
+    fn historical_percentiles_registered_even_without_live_statements() {
+        let fin = Financials {
+            provider_ok: false,
+            historical_valuation: Some(HistoricalValuation {
+                percentile: Some(dec!(98.28)),
+                min: Some(dec!(21.31)),
+                max: Some(dec!(44.53)),
+                median: Some(dec!(31.70)),
+                p25: Some(dec!(28.02)),
+                p75: Some(dec!(36.80)),
+                latest: Some(dec!(43.93)),
+            }),
+            ..Default::default()
+        };
+        let reg = build_facts_registry(&RegistrySources {
+            ticker: "AAPL",
+            financials: Some(&fin),
+            ..Default::default()
+        });
+        let answer = "当前 43.93x 的 PE 处于近 5 年 98.28% 分位，远超历史中位 31.70x，\
+                      p25 为 28.02x、p75 为 36.80x。";
+        let report = verify_answer_numbers(answer, &reg);
+        assert_eq!(
+            report.hard_count, 0,
+            "如实照抄的分位不得判硬失败: {report:?}"
+        );
+        assert_eq!(report.soft_count, 0, "分位应全部核上: {report:?}");
+        assert_eq!(report.pass_count(), 5);
+    }
+
+    /// 估值空间是负数（估值低于现价 = 贵），而百分比桶里其余多为正值。漏登时模型如实引用
+    /// 会撞上"符号相反"判成硬失败——AAPL 实测就栽在这一处。
+    #[test]
+    fn valuation_upside_is_registered_so_negative_space_is_not_a_sign_flip() {
+        let valuation = Valuation {
+            method: "历史 PE 分位".into(),
+            bear: Some(dec!(207.28)),
+            base: Some(dec!(234.51)),
+            bull: Some(dec!(272.01)),
+            upside: Some("-27.8%".into()),
+            downside: Some("-36.2%".into()),
+            current_price: Some(dec!(324.98)),
+            methods: vec!["历史 PE 分位".into()],
+            method_detail: Vec::new(),
+            key_assumptions: Vec::new(),
+            sensitivity: Vec::new(),
+            stage_aware: false,
+            stage: None,
+            data_suspect: false,
+            cannot_value_reason: None,
+        };
+        let reg = build_facts_registry(&RegistrySources {
+            ticker: "AAPL",
+            native_currency: Some("USD"),
+            valuation: Some(&valuation),
+            ..Default::default()
+        });
+        let report = verify_answer_numbers("基准估值区间 234.51 对应现价空间为 -27.8%。", &reg);
+        assert_eq!(report.hard_count, 0, "如实引用估值空间不得判硬: {report:?}");
+        assert_eq!(report.pass_count(), 2);
+    }
+
+    /// 事实块明写"可引用表单类型与日期"，登记表就必须收下公告日期——否则模型照做引用
+    /// 反被判"日期查无"的硬失败。这是本文件第四次出现同一条教训（历史分位、估值空间、
+    /// p25/p75、公告日期），每次都是"喂给模型了但没登记"。
+    #[test]
+    fn filing_dates_are_registered_so_quoting_them_is_not_a_hard_fail() {
+        let filings = vec![
+            Filing {
+                form: "10-Q".into(),
+                filed_date: Some("2026-05-01".into()),
+                source_url: "https://example.com/10q".into(),
+            },
+            Filing {
+                form: "8-K".into(),
+                filed_date: Some("2026-04-30".into()),
+                source_url: "https://example.com/8k".into(),
+            },
+        ];
+        let reg = build_facts_registry(&RegistrySources {
+            ticker: "AAPL",
+            filings: &filings,
+            ..Default::default()
+        });
+        let report =
+            verify_answer_numbers("最新季度财报（10-Q 2026-05-01）仍未核到具体数字。", &reg);
+        assert_eq!(report.hard_count, 0, "如实引用公告日期不得判硬: {report:?}");
+    }
+
+    #[test]
+    fn parse_pct_round_trips_display_strings() {
+        assert_eq!(parse_pct(Some("-27.8%")), Some(dec!(-27.8)));
+        assert_eq!(parse_pct(Some("12%")), Some(dec!(12)));
+        assert_eq!(parse_pct(None), None);
+        assert_eq!(parse_pct(Some("未核到")), None);
+    }
 
     fn tencent_registry() -> FactsRegistry {
         let fin = Financials {
@@ -1208,6 +1515,127 @@ mod tests {
         let r = verify_answer_numbers("净利率 30.4%，本季稳健。", &reg);
         assert_eq!(r.hard_count, 0);
         assert_eq!(r.pass_count(), 1);
+    }
+
+    fn margins_registry() -> FactsRegistry {
+        let fin = Financials {
+            provider_ok: true,
+            currency: Some("CNY".into()),
+            gross_margin: Some(dec!(45.0)),
+            operating_margin: Some(dec!(33.0)),
+            net_margin: Some(dec!(25.0)),
+            pe: Some(dec!(30.0)),
+            pb: Some(dec!(3.0)),
+            ..Default::default()
+        };
+        build_facts_registry(&RegistrySources {
+            ticker: "X",
+            financials: Some(&fin),
+            ..Default::default()
+        })
+    }
+
+    /// 护栏长期的头号盲区：数字个个都对，说法全错。毛利率 45%、净利率 25% 同时登记时，
+    /// 「净利率 45%」在旧逻辑里照样 Pass——因为 45 确实是桶里某条事实。
+    #[test]
+    fn number_attached_to_the_wrong_metric_is_hard() {
+        let reg = margins_registry();
+        let report = verify_answer_numbers("公司盈利能力突出，净利率 45%。", &reg);
+        assert_eq!(
+            report.hard_count, 1,
+            "把毛利率的数说成净利率必须判死: {report:?}"
+        );
+        let reason = report.checked[0].reason.as_deref().expect("需给出原因");
+        assert!(
+            reason.contains("口径错配"),
+            "原因要说清是口径问题: {reason}"
+        );
+        assert!(
+            reason.contains("毛利率"),
+            "要指出这个数字实际属于谁: {reason}"
+        );
+    }
+
+    /// 同一维度里错配的另一种常见形态：PE 与 PB 互串。
+    #[test]
+    fn pe_number_quoted_as_pb_is_hard() {
+        let reg = margins_registry();
+        let report = verify_answer_numbers("估值不便宜，市净率 30x。", &reg);
+        assert_eq!(report.hard_count, 1, "PE 的数说成 PB 必须判死: {report:?}");
+    }
+
+    /// 口径命中的是**离数字最近**的那个词，否则一句话里连着说两个比率就会互相污染。
+    #[test]
+    fn nearest_metric_wins_within_one_sentence() {
+        let reg = margins_registry();
+        let report = verify_answer_numbers("毛利率 45%、净利率 25%，结构健康。", &reg);
+        assert_eq!(report.hard_count, 0, "两个都是如实引用: {report:?}");
+        assert_eq!(report.pass_count(), 2);
+    }
+
+    /// 防误报闸：登记表只登当期值，「毛利率从 25% 提升到 45%」里的 25% 是历史值，
+    /// 不能因为它恰好等于当期净利率就判成口径错配。
+    #[test]
+    fn historical_wording_is_not_a_caliber_mismatch() {
+        let reg = margins_registry();
+        let report = verify_answer_numbers("毛利率从 25% 提升到 45%。", &reg);
+        assert_eq!(report.hard_count, 0, "历史值不得判死: {report:?}");
+    }
+
+    /// 换了主体就不是本公司的口径。「同业净利率约 45%」讲的是别人，拿本公司净利率去核
+    /// 会把一句正常的对比判死——这是口径闸最容易伤到的一类正常表达。
+    #[test]
+    fn peer_subject_is_not_a_caliber_mismatch() {
+        let reg = margins_registry();
+        let report = verify_answer_numbers("同业净利率约 45%，公司仍有差距。", &reg);
+        assert_eq!(
+            report.hard_count, 0,
+            "讲同业不得按本公司口径判死: {report:?}"
+        );
+    }
+
+    /// 换了时间同理，且时间词常出现在口径词**之前**——窗口必须整段看。
+    #[test]
+    fn past_period_before_the_metric_word_is_not_a_mismatch() {
+        let reg = margins_registry();
+        let report = verify_answer_numbers("去年毛利率 25%，今年已明显改善。", &reg);
+        assert_eq!(report.hard_count, 0, "历史期值不得判死: {report:?}");
+    }
+
+    /// 同口径的衍生事实必须认下：说「PE 中位 31.7x」时，当期 PE 是 43.93 并不构成错配。
+    #[test]
+    fn same_caliber_derived_facts_still_pass() {
+        let fin = Financials {
+            provider_ok: true,
+            pe: Some(dec!(43.93)),
+            historical_valuation: Some(HistoricalValuation {
+                median: Some(dec!(31.70)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let reg = build_facts_registry(&RegistrySources {
+            ticker: "AAPL",
+            financials: Some(&fin),
+            ..Default::default()
+        });
+        let report = verify_answer_numbers("PE 中位 31.7x。", &reg);
+        assert_eq!(
+            report.hard_count, 0,
+            "历史 PE 与当期 PE 是同一口径: {report:?}"
+        );
+        assert_eq!(report.pass_count(), 1);
+    }
+
+    /// 登记表里根本没有这条口径时，一切照旧走原来的按桶匹配——新逻辑不许扩大误报面。
+    #[test]
+    fn unregistered_metric_falls_back_to_bucket_matching() {
+        let reg = margins_registry();
+        let report = verify_answer_numbers("股息率 45%。", &reg);
+        assert_eq!(
+            report.hard_count, 0,
+            "股息率未登记，不该凭空判死: {report:?}"
+        );
     }
 
     #[test]

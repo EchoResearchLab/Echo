@@ -1,0 +1,76 @@
+/* ============================================================================
+   Echo Research · 确认对话框
+   破坏性操作唯一的确认形态；不再使用浏览器原生 confirm。
+   ========================================================================= */
+
+.dialog-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(2px);
+  animation: scrimIn var(--dur-2) var(--ease-out) both;
+}
+
+@keyframes scrimIn {
+  from {
+    opacity: 0;
+  }
+}
+
+.dialog-shell {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 91;
+  display: grid;
+  gap: var(--sp-3);
+  width: min(400px, calc(100vw - 2 * var(--sp-5)));
+  padding: var(--sp-6);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-xl);
+  background: var(--glass-strong);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--e-pop), var(--glass-sheen);
+  transform: translate(-50%, -50%);
+  animation: dialogIn var(--dur-3) var(--ease-emph) both;
+}
+
+@keyframes dialogIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -46%) scale(0.97);
+  }
+}
+
+.dialog-shell h2 {
+  font-size: var(--fs-18);
+}
+
+.dialog-shell p {
+  color: var(--ink-3);
+  font-size: var(--fs-14);
+}
+
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+/* 破坏性主按钮：唯一使用危险色填充的地方。 */
+.primary-button.is-danger {
+  background: var(--danger);
+  box-shadow: 0 1px 2px rgba(143, 29, 23, 0.2), 0 8px 20px -8px rgba(143, 29, 23, 0.34);
+}
+
+.primary-button.is-danger:hover:not(:disabled) {
+  background: var(--danger-ink);
+}
+
+.primary-button.is-danger:active:not(:disabled) {
+  background: var(--danger-active);
+}

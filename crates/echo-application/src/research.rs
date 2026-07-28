@@ -4,23 +4,25 @@
 //! 提示词 → 生成 → 护栏 → 持久化。端口用假实现即可做无 IO 单测。
 
 use crate::answer_prompt::{
-    AnswerContext, CompareLegContext, build_compare_user_prompt, build_system_prompt,
-    build_user_prompt,
+    AnswerContext, CompareLegContext, build_compare_user_prompt, build_research_user_prompt,
+    build_system_prompt, compare_recovery_context,
 };
 use crate::model_gateway::{ModelStreamEvent, ModelStreamStart};
+use crate::research_memory::{CompanyMemory, CompanyMemoryUpdate, build_memory_update};
+use crate::research_orchestrator::{RecoveryTrace, ResearchGap, ResearchOrchestrator};
 use crate::{DecisionPanel, ResolvedCompany, build_panel};
 use echo_contracts::{
-    AnswerSource, AskRequest, AskResponse, AssetStageView, CitationGuardView, CompareLegView,
-    CompareResponse, EarningsCalendarView, EvidenceView, FilingView, GuardView, MethodBandView,
-    ResearchStreamCompare, ResearchStreamDelta, ResearchStreamError, ResearchStreamEvent,
-    ResearchStreamFinal, ResearchStreamGuard, ResearchStreamMeta, ResearchStreamStage,
-    ResearchStreamStageName, RouteView, ValuationView,
+    AnswerSource, AskRequest, AskResponse, AssetStageView, CitationGuardView, CompanyHeaderView,
+    CompareLegView, CompareResponse, EarningsCalendarView, EvidenceView, FilingView, GuardView,
+    MethodBandView, ResearchStreamCompare, ResearchStreamDelta, ResearchStreamError,
+    ResearchStreamEvent, ResearchStreamFinal, ResearchStreamGuard, ResearchStreamMeta,
+    ResearchStreamStage, ResearchStreamStageName, RouteView, ValuationView,
 };
 use echo_domain::{
     AssetStage, Company, EarningsCalendar, Evidence, Filing, Financials, HistoricalValuation,
-    MarketSnapshot, MultipleType, PeerAnchor, RegistrySources, ResearchRoute, build_facts_registry,
-    build_soft_note, classify_asset_stage, intent_wants_web_evidence, route_research_intent,
-    verify_answer_citations, verify_answer_numbers,
+    MarketSnapshot, MultipleType, PeerAnchor, RegistrySources, ResearchRoute, Verdict,
+    build_facts_registry, build_soft_note, classify_asset_stage, intent_wants_web_evidence,
+    route_research_intent, verify_answer_citations, verify_answer_numbers,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -44,6 +46,8 @@ pub struct ResearchFacts {
     /// 网页证据（仅定性意图拉取，数字驱动意图与失败降级时为空）——只做定性支撑，
     /// 绝不进 `FactsRegistry`（护栏只认一手财报）。
     pub evidence: Vec<Evidence>,
+    /// 缺口评估、换源轮次与最终降级形态；不参与数值护栏，只用于编排追溯。
+    pub recovery: RecoveryTrace,
 }
 
 /// 比较研究的双腿事实；两侧 registry 不得交叉污染。
@@ -84,6 +88,32 @@ pub struct LoadedFundamentals {
     pub financials: Financials,
     pub pe_ttm: Option<rust_decimal::Decimal>,
     pub company_name: Option<String>,
+}
+
+/// 数据端收到的定向补救任务。应用层只描述“缺什么”，不指定供应商；数据层按授权与质量排序
+/// 决定是 SEC Company Facts、HKEX 年报还是其他已接入适配器。
+#[derive(Clone, Debug)]
+pub struct FactRecoveryRequest {
+    pub ticker: String,
+    pub company_name: Option<String>,
+    pub question: String,
+    pub round: usize,
+    pub gaps: Vec<ResearchGap>,
+    pub multiple_type: MultipleType,
+}
+
+/// 一轮补救返回的增量事实。所有字段都只填缺口，合并时不会覆盖首轮已核事实。
+#[derive(Clone, Debug, Default)]
+pub struct FactRecovery {
+    pub company_name: Option<String>,
+    pub market: Option<MarketSnapshot>,
+    pub fundamentals: Option<LoadedFundamentals>,
+    pub earnings_calendar: Option<EarningsCalendar>,
+    pub historical_valuation: Option<HistoricalValuation>,
+    pub peer_anchor: Option<PeerAnchor>,
+    pub filings: Vec<Filing>,
+    /// 实际命中的来源 id，仅供 trace / 观测，不进入事实登记表。
+    pub sources: Vec<String>,
 }
 
 /// 研究副作用端口——DB / 行情 / 财务 / 模型 / 落库都从这里注入。
@@ -141,6 +171,33 @@ pub trait ResearchPorts: Send + Sync {
         session_id: &str,
     ) -> impl Future<Output = Vec<PriorTurn>> + Send;
 
+    /// 按应用层识别出的具体缺口换源补数。默认空实现让纯核/测试端口诚实降级。
+    fn recover_missing_facts(
+        &self,
+        _request: FactRecoveryRequest,
+    ) -> impl Future<Output = FactRecovery> + Send {
+        async { FactRecovery::default() }
+    }
+
+    /// 用户 + ticker 维度的跨会话公司记忆；无库或尚未建档时返回 `None`。
+    fn load_company_memory(
+        &self,
+        _user_id: &str,
+        _ticker: &str,
+    ) -> impl Future<Output = Option<CompanyMemory>> + Send {
+        async { None }
+    }
+
+    /// 研究答案通过护栏后 best-effort 沉淀公司记忆。失败不能吞掉本轮答案。
+    fn save_company_memory(
+        &self,
+        _user_id: &str,
+        _ticker: &str,
+        _update: CompanyMemoryUpdate,
+    ) -> impl Future<Output = Result<(), String>> + Send {
+        async { Ok(()) }
+    }
+
     fn complete_answer(
         &self,
         system: &str,
@@ -162,6 +219,22 @@ pub trait ResearchPorts: Send + Sync {
         user_id: &str,
         session: PersistResearchSession,
     ) -> impl Future<Output = Result<String, String>> + Send;
+
+    /// 把本轮护栏结论记进质量底账。默认无操作——离线测试与无库场景不该因为记不了账
+    /// 就让研究失败；它是观测通路，不是研究链路的一环。
+    fn record_guard_audit(&self, _audit: GuardAuditRecord) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+}
+
+/// 一轮护栏结论的落库形态。应用层只描述"哪条链路、核了什么、哪些数字硬失败"，
+/// 由边界层决定写进哪张表。
+#[derive(Clone, Debug)]
+pub struct GuardAuditRecord {
+    pub ticker: String,
+    /// 产出这段答案的链路：`ask` / `ask_stream` / `compare` / `report`。
+    pub mode: &'static str,
+    pub outcome: GuardOutcome,
 }
 
 /// 一次非流式研究的结果；可追溯主体、护栏与是否已落库。
@@ -187,7 +260,10 @@ pub struct ResearchService;
 impl ResearchService {
     /// 组装结构化核心事实；网页证据单独在下一阶段加载，使流式路径能在真实 IO 开始前发出
     /// `evidence` 进度，而不是所有取数结束后才假装切换阶段。
-    async fn assemble_core_facts<P: ResearchPorts>(ports: &P, req: &AskRequest) -> ResearchFacts {
+    pub(crate) async fn assemble_core_facts<P: ResearchPorts>(
+        ports: &P,
+        req: &AskRequest,
+    ) -> ResearchFacts {
         let mut company = ResolvedCompany {
             ticker: req.ticker.clone(),
             name_zh: req.name_zh.clone(),
@@ -272,15 +348,16 @@ impl ResearchService {
             peer_anchor,
             filings,
             evidence: Vec::new(),
+            recovery: RecoveryTrace::default(),
         }
     }
 
     /// 完整事实组装：核心行情/财报完成后，按路由计划加载定性网页证据。
     pub async fn assemble_facts<P: ResearchPorts>(ports: &P, req: &AskRequest) -> ResearchFacts {
         let route = route_research_intent(&req.question);
-        let mut facts = Self::assemble_core_facts(ports, req).await;
-        facts.evidence = load_evidence_for_route(ports, req, &facts, &route).await;
-        facts
+        ResearchOrchestrator::default()
+            .collect(ports, req, &route)
+            .await
     }
 
     /// 非流式研究主用例。
@@ -298,23 +375,31 @@ impl ResearchService {
             facts.peer_anchor.as_ref(),
             &facts.filings,
         );
-        let prior_turns = load_prior_turns_for(ports, user_id, &req).await;
+        let (prior_turns, memory) = tokio::join!(
+            load_prior_turns_for(ports, user_id, &req),
+            ports.load_company_memory(user_id, &req.ticker)
+        );
 
         let (answer, answer_source) = match req.draft_answer.clone() {
             Some(draft) => (Some(draft), AnswerSource::Draft),
             None => {
                 let system = build_system_prompt();
-                let user_prompt = build_user_prompt(&AnswerContext {
-                    question: &req.question,
-                    name_zh: facts.company.name_zh.as_deref(),
-                    panel: &panel,
-                    market: &facts.market,
-                    financials: &facts.financials,
-                    filings: &facts.filings,
-                    evidence: &facts.evidence,
-                    depth: route.depth,
-                    history: &prior_turns,
-                });
+                let user_prompt = build_research_user_prompt(
+                    &AnswerContext {
+                        question: &req.question,
+                        name_zh: facts.company.name_zh.as_deref(),
+                        panel: &panel,
+                        market: &facts.market,
+                        financials: &facts.financials,
+                        filings: &facts.filings,
+                        evidence: &facts.evidence,
+                        depth: route.depth,
+                        history: &prior_turns,
+                    },
+                    memory.as_ref(),
+                    facts.peer_anchor.as_ref(),
+                    facts.recovery.degradation,
+                );
                 match ports.complete_answer(&system, &user_prompt, user_id).await {
                     Some(generated) => (Some(generated), AnswerSource::Generated),
                     None => (None, AnswerSource::Unavailable),
@@ -322,15 +407,32 @@ impl ResearchService {
             }
         };
 
-        let fact_guard = answer
+        let guard = answer
             .as_deref()
-            .map(|draft| guard_view(&req, &facts, &panel, draft));
+            .map(|draft| guard_outcome(&req, &facts, &panel, draft));
+        if let Some(outcome) = guard.clone() {
+            record_guard_audit(ports, &req.ticker, "ask", outcome).await;
+        }
+        let fact_guard = guard.map(|outcome| outcome.view);
         let citation_guard = answer
             .as_deref()
             .and_then(|draft| citation_guard_view(&facts.evidence, draft));
+        persist_company_memory_if_safe(
+            ports,
+            user_id,
+            &req,
+            &facts,
+            &panel,
+            memory.as_ref(),
+            answer.as_deref(),
+            fact_guard.as_ref(),
+            citation_guard.as_ref(),
+        )
+        .await;
 
         let mut response = build_ask_response(
             &panel,
+            company_header(&panel.ticker, &facts.company, &facts.market),
             &route,
             answer,
             answer_source,
@@ -384,7 +486,7 @@ impl ResearchService {
         );
 
         let system = build_system_prompt();
-        let user_prompt = build_compare_user_prompt(
+        let mut user_prompt = build_compare_user_prompt(
             &question,
             &CompareLegContext {
                 name_zh: primary_facts.company.name_zh.as_deref(),
@@ -401,6 +503,16 @@ impl ResearchService {
                 evidence: &peer_facts.evidence,
             },
         );
+        user_prompt.push_str(&compare_recovery_context(
+            "公司A",
+            primary_facts.peer_anchor.as_ref(),
+            primary_facts.recovery.degradation,
+        ));
+        user_prompt.push_str(&compare_recovery_context(
+            "公司B",
+            peer_facts.peer_anchor.as_ref(),
+            peer_facts.recovery.degradation,
+        ));
         let (answer, answer_source) =
             match ports.complete_answer(&system, &user_prompt, user_id).await {
                 Some(generated) => (Some(generated), AnswerSource::Generated),
@@ -408,12 +520,21 @@ impl ResearchService {
             };
 
         // 分别验证：每腿只吃自己的登记表核对同一段作答，互不借用。
-        let primary_guard = answer
+        let primary_outcome = answer
             .as_deref()
-            .map(|draft| guard_view(&primary_req, &primary_facts, &primary_panel, draft));
-        let peer_guard = answer
+            .map(|draft| guard_outcome(&primary_req, &primary_facts, &primary_panel, draft));
+        let peer_outcome = answer
             .as_deref()
-            .map(|draft| guard_view(&peer_req, &peer_facts, &peer_panel, draft));
+            .map(|draft| guard_outcome(&peer_req, &peer_facts, &peer_panel, draft));
+        // 两腿各记一条：对比里"哪一边的数字站不住"是最需要分开看的，合成一条就没法归因。
+        if let Some(outcome) = primary_outcome.clone() {
+            record_guard_audit(ports, &primary_req.ticker, "compare", outcome).await;
+        }
+        if let Some(outcome) = peer_outcome.clone() {
+            record_guard_audit(ports, &peer_req.ticker, "compare", outcome).await;
+        }
+        let primary_guard = primary_outcome.map(|outcome| outcome.view);
+        let peer_guard = peer_outcome.map(|outcome| outcome.view);
 
         let response = CompareResponse {
             route: route_view(&route),
@@ -509,11 +630,13 @@ async fn drive_stream<P: ResearchPorts>(
         .await?;
     }
 
-    let mut facts = ResearchService::assemble_core_facts(ports, &req).await;
+    let orchestrator = ResearchOrchestrator::default();
+    let mut facts = orchestrator.collect_core(ports, &req, &route).await;
     if let Some(stage) = plan_stream_stage(&route, "evidence") {
         send(ResearchStreamEvent::Stage(stage)).await?;
         facts.evidence = load_evidence_for_route(ports, &req, &facts, &route).await;
     }
+    orchestrator.finish_trace(&route, &mut facts);
     if let Some(stage) = plan_stream_stage(&route, "valuation") {
         send(ResearchStreamEvent::Stage(stage)).await?;
     }
@@ -524,10 +647,14 @@ async fn drive_stream<P: ResearchPorts>(
         facts.peer_anchor.as_ref(),
         &facts.filings,
     );
-    let prior_turns = load_prior_turns_for(ports, user_id, &req).await;
+    let (prior_turns, memory) = tokio::join!(
+        load_prior_turns_for(ports, user_id, &req),
+        ports.load_company_memory(user_id, &req.ticker)
+    );
 
     send(ResearchStreamEvent::Meta(Box::new(ResearchStreamMeta {
         ticker: panel.ticker.clone(),
+        company: company_header(&panel.ticker, &facts.company, &facts.market),
         route: route_view(&route),
         data_completeness: panel.data_completeness,
         connected_sources: panel
@@ -556,17 +683,22 @@ async fn drive_stream<P: ResearchPorts>(
         ))
         .await?;
         let system = build_system_prompt();
-        let user_prompt = build_user_prompt(&AnswerContext {
-            question: &req.question,
-            name_zh: facts.company.name_zh.as_deref(),
-            panel: &panel,
-            market: &facts.market,
-            financials: &facts.financials,
-            filings: &facts.filings,
-            evidence: &facts.evidence,
-            depth: route.depth,
-            history: &prior_turns,
-        });
+        let user_prompt = build_research_user_prompt(
+            &AnswerContext {
+                question: &req.question,
+                name_zh: facts.company.name_zh.as_deref(),
+                panel: &panel,
+                market: &facts.market,
+                financials: &facts.financials,
+                filings: &facts.filings,
+                evidence: &facts.evidence,
+                depth: route.depth,
+                history: &prior_turns,
+            },
+            memory.as_ref(),
+            facts.peer_anchor.as_ref(),
+            facts.recovery.degradation,
+        );
         match ports
             .stream_answer(system, user_prompt, user_id.to_string())
             .await
@@ -602,12 +734,28 @@ async fn drive_stream<P: ResearchPorts>(
     ))
     .await?;
 
-    let fact_guard = answer
+    let guard = answer
         .as_deref()
-        .map(|draft| guard_view(&req, &facts, &panel, draft));
+        .map(|draft| guard_outcome(&req, &facts, &panel, draft));
+    if let Some(outcome) = guard.clone() {
+        record_guard_audit(ports, &req.ticker, "ask_stream", outcome).await;
+    }
+    let fact_guard = guard.map(|outcome| outcome.view);
     let citation_guard = answer
         .as_deref()
         .and_then(|draft| citation_guard_view(&facts.evidence, draft));
+    persist_company_memory_if_safe(
+        ports,
+        user_id,
+        &req,
+        &facts,
+        &panel,
+        memory.as_ref(),
+        answer.as_deref(),
+        fact_guard.as_ref(),
+        citation_guard.as_ref(),
+    )
+    .await;
     send(ResearchStreamEvent::Guard(ResearchStreamGuard {
         fact_guard: fact_guard.clone(),
         citation_guard: citation_guard.clone(),
@@ -616,6 +764,7 @@ async fn drive_stream<P: ResearchPorts>(
 
     let mut response = build_ask_response(
         &panel,
+        company_header(&panel.ticker, &facts.company, &facts.market),
         &route,
         answer,
         answer_source,
@@ -678,7 +827,7 @@ const DEEP_EVIDENCE_ASPECTS: &[&str] = &[
 /// deep 合并去重后保留的证据条数上限——控制提示词体量与成本。
 const MAX_DEEP_EVIDENCE: usize = 10;
 
-async fn load_evidence_for_route<P: ResearchPorts>(
+pub(crate) async fn load_evidence_for_route<P: ResearchPorts>(
     ports: &P,
     req: &AskRequest,
     facts: &ResearchFacts,
@@ -695,6 +844,53 @@ async fn load_evidence_for_route<P: ResearchPorts>(
         route.depth,
     )
     .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn persist_company_memory_if_safe<P: ResearchPorts>(
+    ports: &P,
+    user_id: &str,
+    req: &AskRequest,
+    facts: &ResearchFacts,
+    panel: &DecisionPanel,
+    existing: Option<&CompanyMemory>,
+    answer: Option<&str>,
+    fact_guard: Option<&GuardView>,
+    citation_guard: Option<&CitationGuardView>,
+) {
+    let Some(answer) = answer.filter(|value| !value.trim().is_empty()) else {
+        return;
+    };
+    // 只有**硬**失败才拦记忆：数字与登记表对不上（`fact_guard.has_hard_fail`），
+    // 或引用了不存在的来源号（`citation_guard.has_hard_fail`）——这两样都说明这段答案
+    // 本身不可信，沉淀下来会污染后续所有会话。
+    //
+    // `ungrounded`（有证据却一个来源号都没标）**不拦**。领域层把它定义为 soft 提示、
+    // 明确"不拦截"，这里却当硬条件用，结果是：恰恰在定性研究——记忆最该积累的地方——
+    // 只要模型忘了写 `[1]`，这家公司的论点就永远存不下来。它是引用完整性的风格问题，
+    // 不是"这段判断是错的"的证据。
+    if fact_guard.is_some_and(|guard| guard.has_hard_fail)
+        || citation_guard.is_some_and(|guard| guard.has_hard_fail)
+    {
+        return;
+    }
+    let update = build_memory_update(
+        existing,
+        facts.company.name_zh.as_deref(),
+        &req.question,
+        answer,
+        panel,
+    );
+    if let Err(error) = ports
+        .save_company_memory(user_id, &req.ticker, update)
+        .await
+    {
+        tracing::warn!(
+            ticker = %req.ticker,
+            error = %error,
+            "公司记忆沉淀失败，本轮答案仍正常返回"
+        );
+    }
 }
 
 /// 按深度决定证据检索广度：`Deep` 走基础问题 + 多维**并发**检索、按 URL 去重合并、截断到
@@ -733,12 +929,42 @@ pub(crate) async fn gather_evidence<P: ResearchPorts>(
     merged
 }
 
-pub(crate) fn guard_view(
+/// 把一轮护栏结论交给端口落账。空 ticker 不记——没有主体的记录在统计里没法归因。
+pub(crate) async fn record_guard_audit<P: ResearchPorts>(
+    ports: &P,
+    ticker: &str,
+    mode: &'static str,
+    outcome: GuardOutcome,
+) {
+    if ticker.trim().is_empty() {
+        return;
+    }
+    ports
+        .record_guard_audit(GuardAuditRecord {
+            ticker: ticker.to_string(),
+            mode,
+            outcome,
+        })
+        .await;
+}
+
+/// 一轮数字护栏的完整结论：给前端的聚合视图 + 给质量底账的硬失败明细。
+///
+/// 两者必须来自**同一次** `verify_answer_numbers`——分两次跑不仅浪费，还会在取数或
+/// 提示词有随机性时产生"视图说 0 个 hard、底账里却记着 2 条"的对不上账。
+#[derive(Clone, Debug)]
+pub struct GuardOutcome {
+    pub view: GuardView,
+    /// 判 hard 的每个数字：(答案原文, 维度, 原因)。空表示本轮没有硬失败。
+    pub hard_details: Vec<(String, String, Option<String>)>,
+}
+
+pub(crate) fn guard_outcome(
     req: &AskRequest,
     facts: &ResearchFacts,
     panel: &DecisionPanel,
     draft: &str,
-) -> GuardView {
+) -> GuardOutcome {
     let registry = build_facts_registry(&RegistrySources {
         ticker: &req.ticker,
         native_currency: req
@@ -748,20 +974,38 @@ pub(crate) fn guard_view(
         market: Some(&facts.market),
         financials: Some(&facts.financials),
         valuation: Some(&panel.valuation),
+        peer_anchor: facts.peer_anchor.as_ref(),
         earnings_next_date: facts
             .earnings_calendar
             .as_ref()
             .and_then(|c| c.next_date.as_deref()),
+        // 公告随事实块一起喂给了模型，日期就必须可核。
+        filings: &facts.filings,
         ..Default::default()
     });
     let report = verify_answer_numbers(draft, &registry);
-    GuardView {
-        total: report.checked.len(),
-        pass: report.pass_count(),
-        soft: report.soft_count,
-        hard: report.hard_count,
-        has_hard_fail: report.has_hard_fail(),
-        soft_note: build_soft_note(&report),
+    let hard_details = report
+        .checked
+        .iter()
+        .filter(|checked| checked.verdict == Verdict::Hard)
+        .map(|checked| {
+            (
+                checked.raw.clone(),
+                checked.dimension.to_string(),
+                checked.reason.clone(),
+            )
+        })
+        .collect();
+    GuardOutcome {
+        view: GuardView {
+            total: report.checked.len(),
+            pass: report.pass_count(),
+            soft: report.soft_count,
+            hard: report.hard_count,
+            has_hard_fail: report.has_hard_fail(),
+            soft_note: build_soft_note(&report),
+        },
+        hard_details,
     }
 }
 
@@ -798,8 +1042,33 @@ pub(crate) fn citation_guard_view(evidence: &[Evidence], draft: &str) -> Option<
 }
 
 #[allow(clippy::too_many_arguments)]
+/// 行情抬头。**全缺就返回 `None`**——一个只有代码、没有任何数字的抬头是纯噪声，
+/// 不如不画；缺哪一项就少哪一项，绝不用 0 或上一次的值占位。
+fn company_header(
+    ticker: &str,
+    company: &ResolvedCompany,
+    market: &MarketSnapshot,
+) -> Option<CompanyHeaderView> {
+    let name = company.name_zh.clone();
+    let header = CompanyHeaderView {
+        ticker: ticker.to_string(),
+        name,
+        price: market.price,
+        change_percent: market.change_percent,
+        market_cap: market.market_cap,
+        currency: market.currency.clone(),
+    };
+    let empty = header.name.is_none()
+        && header.price.is_none()
+        && header.change_percent.is_none()
+        && header.market_cap.is_none();
+    (!empty).then_some(header)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_ask_response(
     panel: &DecisionPanel,
+    company: Option<CompanyHeaderView>,
     route: &ResearchRoute,
     answer: Option<String>,
     answer_source: AnswerSource,
@@ -811,6 +1080,7 @@ fn build_ask_response(
 ) -> AskResponse {
     AskResponse {
         ticker: panel.ticker.clone(),
+        company,
         route: route_view(route),
         data_completeness: panel.data_completeness,
         connected_sources: panel
@@ -893,7 +1163,10 @@ async fn persist_outcome<P: ResearchPorts>(
         report_markdown: response.answer.clone(),
         decision_panel: serde_json::to_value(&response.valuation).ok(),
         full_research: response.answer.clone(),
-        data_sources: Some(serde_json::json!({ "connected": response.connected_sources.clone() })),
+        data_sources: Some(serde_json::json!({
+            "connected": response.connected_sources.clone(),
+            "recovery": facts.recovery,
+        })),
         turn_count: Some(prior_turns.len() as i32 + 1),
         thread,
     };
@@ -972,6 +1245,7 @@ pub(crate) fn valuation_view(panel: &DecisionPanel) -> ValuationView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::research_orchestrator::ResearchDegradation;
     use rust_decimal_macros::dec;
     use std::sync::Mutex;
 
@@ -986,6 +1260,11 @@ mod tests {
         fundamentals_by_ticker: std::collections::HashMap<String, LoadedFundamentals>,
         earnings_calendar: Option<EarningsCalendar>,
         historical_valuation: Option<HistoricalValuation>,
+        recovery: Option<FactRecovery>,
+        recovery_calls: std::sync::atomic::AtomicUsize,
+        memory: Option<CompanyMemory>,
+        saved_memories: Mutex<Vec<CompanyMemoryUpdate>>,
+        prompts: Mutex<Vec<String>>,
         answer: Option<String>,
         stream_chunks: Vec<String>,
         stream_fail: Option<String>,
@@ -996,6 +1275,8 @@ mod tests {
         evidence: Vec<Evidence>,
         /// `load_web_evidence` 被调用次数——测多维检索广度（deep 多次、其余一次）。
         evidence_calls: std::sync::atomic::AtomicUsize,
+        /// 落进质量底账的护栏审计——用来证明每条作答链路都真的记了账。
+        guard_audits: Mutex<Vec<GuardAuditRecord>>,
     }
 
     impl ResearchPorts for FakePorts {
@@ -1015,6 +1296,10 @@ mod tests {
             } else {
                 Err("unavailable".into())
             }
+        }
+
+        async fn record_guard_audit(&self, audit: GuardAuditRecord) {
+            self.guard_audits.lock().unwrap().push(audit);
         }
 
         async fn load_fundamentals(&self, ticker: &str) -> Option<LoadedFundamentals> {
@@ -1059,12 +1344,37 @@ mod tests {
             self.prior_turns.clone()
         }
 
+        async fn recover_missing_facts(&self, _request: FactRecoveryRequest) -> FactRecovery {
+            self.recovery_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.recovery.clone().unwrap_or_default()
+        }
+
+        async fn load_company_memory(
+            &self,
+            _user_id: &str,
+            _ticker: &str,
+        ) -> Option<CompanyMemory> {
+            self.memory.clone()
+        }
+
+        async fn save_company_memory(
+            &self,
+            _user_id: &str,
+            _ticker: &str,
+            update: CompanyMemoryUpdate,
+        ) -> Result<(), String> {
+            self.saved_memories.lock().expect("lock").push(update);
+            Ok(())
+        }
+
         async fn complete_answer(
             &self,
             _system: &str,
-            _user: &str,
+            user: &str,
             _user_id: &str,
         ) -> Option<String> {
+            self.prompts.lock().expect("lock").push(user.to_string());
             self.answer.clone()
         }
 
@@ -1137,6 +1447,52 @@ mod tests {
         assert!(outcome.response.fact_guard.is_some());
         assert!(outcome.persisted);
         assert_eq!(outcome.route.intent.as_str(), "valuation");
+    }
+
+    /// 护栏算了就必须记账。护栏是研究质量的唯一量化信号，只在当轮弹个提示、不落底账，
+    /// 就没法回答"换了提示词之后硬失败率是升是降"——这正是它冻结了很久的原因。
+    #[tokio::test]
+    async fn every_answer_path_records_a_guard_audit() {
+        let ports = FakePorts {
+            answer: Some("现价约 190 美元。".into()),
+            ..FakePorts::default()
+        };
+        let req = AskRequest {
+            question: "估值怎么样".into(),
+            ticker: "AAPL".into(),
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let outcome = ResearchService::ask(&ports, "user-1", req).await;
+        let audits = ports.guard_audits.lock().expect("lock");
+        assert_eq!(audits.len(), 1, "非流式作答必须记一条护栏审计");
+        assert_eq!(audits[0].ticker, "AAPL");
+        assert_eq!(audits[0].mode, "ask");
+        assert_eq!(
+            audits[0].outcome.view.total,
+            outcome
+                .response
+                .fact_guard
+                .as_ref()
+                .expect("fact guard")
+                .total,
+            "落账的计数必须和返回给前端的视图同源，否则两边永远对不上"
+        );
+    }
+
+    /// 没有作答就没有可核的数字——这时记一条"全 0"的审计会污染硬失败率的分母。
+    #[tokio::test]
+    async fn unavailable_answer_records_no_guard_audit() {
+        let ports = FakePorts::default();
+        let req = AskRequest {
+            question: "估值怎么样".into(),
+            ticker: "AAPL".into(),
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let outcome = ResearchService::ask(&ports, "user-1", req).await;
+        assert_eq!(outcome.response.answer_source, AnswerSource::Unavailable);
+        assert!(ports.guard_audits.lock().expect("lock").is_empty());
     }
 
     #[tokio::test]
@@ -1608,5 +1964,184 @@ mod tests {
         };
         assert!(!final_event.persisted);
         assert_eq!(final_event.response.answer.as_deref(), Some("全文"));
+    }
+
+    #[tokio::test]
+    async fn gap_loop_switches_source_and_repairs_missing_annualized_eps() {
+        let recovery = FactRecovery {
+            fundamentals: Some(LoadedFundamentals {
+                financials: Financials {
+                    provider_ok: true,
+                    eps: Some(dec!(5)),
+                    eps_annualized: Some(true),
+                    ..Default::default()
+                },
+                pe_ttm: Some(dec!(20)),
+                company_name: None,
+            }),
+            historical_valuation: Some(HistoricalValuation {
+                percentile: Some(dec!(50)),
+                min: Some(dec!(10)),
+                max: Some(dec!(30)),
+                median: Some(dec!(20)),
+                p25: Some(dec!(15)),
+                p75: Some(dec!(25)),
+                latest: Some(dec!(20)),
+            }),
+            peer_anchor: Some(PeerAnchor {
+                multiple_type: MultipleType::Pe,
+                p25: dec!(18),
+                median: dec!(20),
+                p75: dec!(22),
+                n: 3,
+                tickers: vec!["MSFT".into(), "GOOGL".into(), "META".into()],
+            }),
+            sources: vec!["sec_company_facts".into()],
+            ..Default::default()
+        };
+        let ports = FakePorts {
+            recovery: Some(recovery),
+            ..Default::default()
+        };
+        let req = AskRequest {
+            question: "估值".into(),
+            ticker: "AAPL".into(),
+            price: Some(dec!(100)),
+            revenue: Some(dec!(1000)),
+            net_margin: Some(dec!(10)),
+            eps: Some(dec!(1)),
+            eps_annualized: Some(false),
+            ..Default::default()
+        };
+        let facts = ResearchService::assemble_facts(&ports, &req).await;
+        assert_eq!(facts.financials.eps, Some(dec!(5)));
+        assert_eq!(facts.financials.eps_annualized, Some(true));
+        assert_eq!(facts.recovery.rounds.len(), 1);
+        assert!(facts.recovery.final_gaps.is_empty());
+        assert_eq!(facts.recovery.rounds[0].sources, ["sec_company_facts"]);
+        assert_eq!(
+            ports
+                .recovery_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn gap_loop_stops_early_when_a_round_makes_no_progress() {
+        let ports = FakePorts::default();
+        let req = AskRequest::minimal("估值", "AAPL");
+        let facts = ResearchService::assemble_facts(&ports, &req).await;
+        assert_eq!(facts.recovery.rounds.len(), 1);
+        assert!(!facts.recovery.rounds[0].made_progress);
+        assert_eq!(
+            ports
+                .recovery_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "同一缺口无变化时不得跑满 N 轮"
+        );
+    }
+
+    #[tokio::test]
+    async fn valuation_failure_explicitly_degrades_to_peer_comparison_only() {
+        let ports = FakePorts {
+            recovery: Some(FactRecovery {
+                peer_anchor: Some(PeerAnchor {
+                    multiple_type: MultipleType::Pe,
+                    p25: dec!(15),
+                    median: dec!(20),
+                    p75: dec!(25),
+                    n: 3,
+                    tickers: vec!["A".into(), "B".into(), "C".into()],
+                }),
+                sources: vec!["peer_anchor_retry".into()],
+                ..Default::default()
+            }),
+            answer: Some("同业 PE 分布为 p25 15x、中位 20x、p75 25x；本轮不能给目标价。".into()),
+            ..Default::default()
+        };
+        let req = AskRequest {
+            question: "估值".into(),
+            ticker: "AAPL".into(),
+            price: Some(dec!(100)),
+            revenue: Some(dec!(1000)),
+            eps: Some(dec!(1)),
+            eps_annualized: Some(false),
+            ..Default::default()
+        };
+        let outcome = ResearchService::ask(&ports, "u", req).await;
+        assert_eq!(
+            outcome.facts.recovery.degradation,
+            ResearchDegradation::PeerComparisonOnly
+        );
+        let prompt = ports.prompts.lock().expect("lock").last().cloned().unwrap();
+        assert!(prompt.contains("只回答同业倍数分布与可比性限制"));
+        assert!(prompt.contains("p25 15x / 中位 20x / p75 25x"));
+        let guard = outcome.response.fact_guard.expect("fact guard");
+        assert!(!guard.has_hard_fail);
+        assert!(guard.pass >= 3, "喂给模型的同业倍数必须先进入事实登记表");
+    }
+
+    #[tokio::test]
+    async fn a_new_session_reads_and_updates_company_memory_without_reusing_old_numbers() {
+        let ports = FakePorts {
+            memory: Some(CompanyMemory {
+                ticker: "AAPL".into(),
+                thesis: Some("生态粘性仍是核心论点".into()),
+                profile_md: Some("旧估值 PE 18.5x，重点观察服务收入。".into()),
+                turn_count: 2,
+                ..Default::default()
+            }),
+            answer: Some("生态粘性仍强，但需要继续验证服务业务的兑现。".into()),
+            ..Default::default()
+        };
+        let req = AskRequest::minimal("护城河还成立吗", "AAPL");
+        let outcome = ResearchService::ask(&ports, "u", req).await;
+        assert!(outcome.response.session_id.is_some(), "这是新研究会话");
+        let prompt = ports.prompts.lock().expect("lock").last().cloned().unwrap();
+        assert!(prompt.contains("生态粘性仍是核心论点"));
+        assert!(prompt.contains("[历史数值已隐藏]"));
+        assert!(!prompt.contains("18.5"));
+        let saved = ports.saved_memories.lock().expect("lock");
+        assert_eq!(saved.len(), 1);
+        assert!(saved[0].profile_md.contains("## 自动研究记忆"));
+        let auto = saved[0]
+            .profile_md
+            .split_once("## 自动研究记忆")
+            .expect("auto section")
+            .1;
+        assert!(!auto.contains("18.5"));
+    }
+
+    /// 定性研究里，模型经常忘了写 `[1]` 这样的来源号。那是引用完整性的软提示，
+    /// 不是"这段判断是错的"——此前却被当成硬条件，导致最该积累记忆的定性研究
+    /// 永远存不下任何论点。
+    #[tokio::test]
+    async fn uncited_qualitative_answer_still_accumulates_memory() {
+        let ports = FakePorts {
+            evidence: vec![Evidence {
+                title: "苹果服务业务季度回顾".into(),
+                url: "https://example.com/aapl-services".into(),
+                snippet: "服务收入占比继续提升。".into(),
+                ..Default::default()
+            }],
+            // 一个来源号都不标——ungrounded 成立，但没有任何硬失败。
+            answer: Some("生态粘性仍强，服务业务是后续观察重点。".into()),
+            ..Default::default()
+        };
+        let req = AskRequest::minimal("苹果的护城河还成立吗", "AAPL");
+        let outcome = ResearchService::ask(&ports, "u", req).await;
+        let citation = outcome
+            .response
+            .citation_guard
+            .expect("有证据就该有引用护栏");
+        assert!(citation.ungrounded, "本轮确实一个来源号都没标");
+        assert!(!citation.has_hard_fail, "没有虚构来源号");
+        assert_eq!(
+            ports.saved_memories.lock().expect("lock").len(),
+            1,
+            "软信号不得拦住记忆沉淀"
+        );
     }
 }

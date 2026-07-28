@@ -1,0 +1,223 @@
+/* ============================================================================
+   Echo Research · 设置
+   ========================================================================= */
+
+.settings-page-content {
+  display: grid;
+  gap: var(--sp-6);
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: var(--sp-6);
+  align-items: start;
+}
+
+.settings-card {
+  display: grid;
+  gap: var(--sp-4);
+}
+
+.settings-card-head h2 {
+  font-size: var(--fs-18);
+}
+
+.settings-delivery-card {
+  gap: 0;
+}
+
+.settings-delivery-card .settings-card-head {
+  margin-bottom: var(--sp-2);
+}
+
+/* ── 图标 ───────────────────────────────────────────────────────────── */
+.settings-glyph {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  color: var(--brand-600);
+  border-radius: var(--r-sm);
+  background: var(--brand-tint);
+}
+
+.settings-glyph svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ── 开关行 ─────────────────────────────────────────────────────────── */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4) 0;
+  border-top: 1px solid var(--line-1);
+  cursor: pointer;
+}
+
+.toggle-copy {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.toggle-copy strong {
+  font-size: var(--fs-14);
+  font-weight: 600;
+}
+
+.toggle-copy small {
+  color: var(--ink-3);
+  font-size: var(--fs-13);
+  line-height: var(--lh-snug);
+}
+
+/* ── 免打扰时段 ─────────────────────────────────────────────────────── */
+.quiet-hours-card p.muted {
+  line-height: var(--lh-snug);
+}
+
+.time-range {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: var(--sp-3);
+  align-items: end;
+}
+
+.time-range label {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.time-range label > span {
+  color: var(--ink-2);
+  font-size: var(--fs-13);
+  font-weight: 550;
+}
+
+.time-input-shell {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding-left: var(--sp-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--paper-raised);
+  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+
+.time-input-shell:focus-within {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring);
+}
+
+.time-input-shell .settings-glyph {
+  width: 20px;
+  height: 20px;
+  color: var(--ink-4);
+  background: none;
+}
+
+.time-input-shell .settings-glyph svg {
+  width: 16px;
+  height: 16px;
+}
+
+.time-input-shell input {
+  min-width: 0;
+  padding-left: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.time-input-shell input:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+.time-range-divider {
+  padding-bottom: var(--sp-3);
+  color: var(--ink-4);
+}
+
+.quiet-note {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  color: var(--ink-3);
+  font-size: var(--fs-13);
+  border-radius: var(--r-sm);
+  background: var(--paper-canvas);
+}
+
+.quiet-note span[aria-hidden] {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--paper-raised);
+  font-size: var(--fs-11);
+  font-style: italic;
+  font-weight: 700;
+  border-radius: var(--r-full);
+  background: var(--ink-4);
+}
+
+/* ── 保存栏：贴底吸附，不再用一个空卡片托一个按钮 ─────────────────── */
+.settings-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-4);
+  padding: var(--sp-4) 0;
+  border-top: 1px solid var(--line-1);
+  /* 起点用 transparent 而不是写死的 rgba(245,245,247,0)：那是一个浅色专用值，
+     深色下这条渐变的起点就不是本主题的画布色了。 */
+  background: linear-gradient(180deg, transparent 0%, var(--paper-canvas) 40%);
+}
+
+.settings-actions > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── 邀请码（仅 owner） ─────────────────────────────────────────────── */
+.invite-code {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--paper-sunken);
+}
+
+/* 邀请码要被人一个字符一个字符抄下来：等宽 + 拉开字距，把 0/O、1/l 分清楚。 */
+.invite-code code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-1);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: var(--fs-13);
+  letter-spacing: 0.06em;
+  user-select: all;
+}

@@ -7,7 +7,11 @@
 
 use crate::DecisionPanel;
 use crate::research::PriorTurn;
-use echo_domain::{Evidence, Filing, Financials, MarketSnapshot, ResearchDepth};
+use crate::research_memory::{CompanyMemory, memory_prompt_block};
+use crate::research_orchestrator::ResearchDegradation;
+use echo_domain::{
+    Evidence, Filing, Financials, MarketSnapshot, MultipleType, PeerAnchor, ResearchDepth,
+};
 use rust_decimal::Decimal;
 
 /// 作答上下文——本请求这一家公司的全部已核事实（单一主体，无跨公司泄漏面）。
@@ -62,6 +66,62 @@ fn truncate_chars(s: &str, max: usize) -> String {
     out
 }
 
+/// 会话历史最多回看多少轮。之前是固定 3 轮，第 4 轮起用户说的一切都消失——
+/// 多轮追问到中段就开始"失忆"，同一个问题被反复问回来。
+const MAX_HISTORY_TURNS: usize = 8;
+/// 历史块的总字符预算。按预算而不是按轮数截断，是因为"3 轮"在短问答里浪费、
+/// 在长答案里又爆掉；真正稀缺的是提示词长度，就直接管住它。
+const HISTORY_CHAR_BUDGET: usize = 2_400;
+/// 最近一轮答案的上限。越近的轮次越可能被追问指代，给它最多的篇幅。
+const HISTORY_NEWEST_ANSWER_CHARS: usize = 700;
+/// 越往前的轮次每轮递减到多少为止——低于这个长度的摘要已经无法承接指代，
+/// 与其塞一句残缺的开头，不如把预算让给更近的轮次。
+const HISTORY_OLDEST_ANSWER_CHARS: usize = 180;
+/// 用户问题本身几乎总是短句，但不设上限就可能被一段粘贴进来的长文撑爆。
+const HISTORY_QUESTION_CHARS: usize = 200;
+
+/// 构造"此前几轮问答"块。
+///
+/// 分配规则：从最近一轮往前，答案配额按 0.68 逐轮衰减到
+/// [`HISTORY_OLDEST_ANSWER_CHARS`] 为止；累计超出 [`HISTORY_CHAR_BUDGET`] 就停止回看。
+/// 这样一次深聊里，紧邻的两三轮仍然接近完整，更早的轮次退化成线索——而不是像以前那样
+/// 直接消失。
+///
+/// **历史永远只是指代线索**：块头的措辞明确禁止把其中的数字当本轮依据，
+/// 数字一律以下方事实块为准（历史里的旧价格/旧估值不进 `FactsRegistry`）。
+fn history_block(history: &[PriorTurn]) -> String {
+    if history.is_empty() {
+        return String::new();
+    }
+    let mut budget = HISTORY_CHAR_BUDGET;
+    let mut allowance = HISTORY_NEWEST_ANSWER_CHARS;
+    let mut rendered: Vec<String> = Vec::new();
+
+    for turn in history.iter().rev().take(MAX_HISTORY_TURNS) {
+        let question = truncate_chars(turn.question.trim(), HISTORY_QUESTION_CHARS);
+        let answer = truncate_chars(turn.answer.trim(), allowance);
+        let cost = question.chars().count() + answer.chars().count();
+        if cost > budget {
+            break;
+        }
+        budget -= cost;
+        rendered.push(format!("用户问：{question}\n上轮作答摘要：{answer}\n\n"));
+        allowance = (allowance * 68 / 100).max(HISTORY_OLDEST_ANSWER_CHARS);
+    }
+
+    if rendered.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "\n== 本次会话此前几轮问答（仅供理解代词/实体指代与承接上文，不得引用其中任何数字作为本轮核对依据——本轮所有数字以下方事实块为准）==\n",
+    );
+    // 收集时是从新到旧，喂给模型要按时间正序，否则"上一轮"指向的是最早那轮。
+    for turn in rendered.into_iter().rev() {
+        out.push_str(&turn);
+    }
+    out
+}
+
 /// 把一个可选定点数渲染成事实行的值；缺就「未核到」。
 pub(crate) fn field(value: Option<Decimal>, unit: &str) -> String {
     match value {
@@ -96,18 +156,9 @@ pub fn build_user_prompt(ctx: &AnswerContext) -> String {
     let mut out = String::new();
     out.push_str(&format!("研究对象：{name}（{}）\n", ctx.panel.ticker));
 
-    if !ctx.history.is_empty() {
-        out.push_str(
-            "\n== 本次会话此前几轮问答（仅供理解代词/实体指代，不得引用其中任何数字作为本轮核对依据——本轮所有数字以下方事实块为准）==\n",
-        );
-        let recent = ctx.history.iter().rev().take(3).collect::<Vec<_>>();
-        for turn in recent.into_iter().rev() {
-            out.push_str(&format!(
-                "用户问：{}\n上轮作答摘要：{}\n\n",
-                turn.question,
-                truncate_chars(&turn.answer, 300)
-            ));
-        }
+    let history = history_block(ctx.history);
+    if !history.is_empty() {
+        out.push_str(&history);
     }
 
     out.push_str(&format!("用户问题：{}\n", ctx.question));
@@ -115,6 +166,89 @@ pub fn build_user_prompt(ctx: &AnswerContext) -> String {
     out.push('\n');
     out.push_str(&facts_block(ctx));
     out
+}
+
+/// 聊天/报告主链使用的增强提示词：在本轮事实块之后追加显式降级约束与跨会话定性记忆。
+/// 旧记忆不进入 `FactsRegistry`，数字已在 [`memory_prompt_block`] 中遮蔽。
+#[must_use]
+pub fn build_research_user_prompt(
+    ctx: &AnswerContext,
+    memory: Option<&CompanyMemory>,
+    peer_anchor: Option<&PeerAnchor>,
+    degradation: ResearchDegradation,
+) -> String {
+    let mut out = build_user_prompt(ctx);
+    out.push_str(&supplemental_research_context(
+        memory,
+        peer_anchor,
+        degradation,
+    ));
+    out
+}
+
+pub(crate) fn supplemental_research_context(
+    memory: Option<&CompanyMemory>,
+    peer_anchor: Option<&PeerAnchor>,
+    degradation: ResearchDegradation,
+) -> String {
+    let mut out = String::new();
+    if let Some(peer) = peer_anchor {
+        out.push_str(&peer_anchor_block("已核到的同业倍数对照", peer));
+    }
+    match degradation {
+        ResearchDegradation::PeerComparisonOnly => out.push_str(
+            "\n降级规则：本轮公司自身估值未能成立，只回答同业倍数分布与可比性限制；\
+             不给目标价、估值区间或隐含上涨空间。\n",
+        ),
+        ResearchDegradation::QualitativeOnly => out.push_str(
+            "\n降级规则：本轮一手财务仍未核到，只做定性研究并列出待验证项；\
+             不给任何财务数字或估值结论。\n",
+        ),
+        ResearchDegradation::None => {}
+    }
+    out.push_str(&memory_prompt_block(memory));
+    out
+}
+
+pub(crate) fn compare_recovery_context(
+    label: &str,
+    peer_anchor: Option<&PeerAnchor>,
+    degradation: ResearchDegradation,
+) -> String {
+    let mut out = String::new();
+    if let Some(peer) = peer_anchor {
+        out.push_str(&peer_anchor_block(
+            &format!("{label} 已核到的同业倍数对照"),
+            peer,
+        ));
+    }
+    match degradation {
+        ResearchDegradation::PeerComparisonOnly => out.push_str(&format!(
+            "\n{label} 降级规则：自身估值未能成立，只比较同业倍数分布与可比性限制，\
+             不给该公司的目标价、估值区间或隐含上涨空间。\n"
+        )),
+        ResearchDegradation::QualitativeOnly => out.push_str(&format!(
+            "\n{label} 降级规则：一手财务仍未核到，只做定性比较，不给该公司的财务数字或估值结论。\n"
+        )),
+        ResearchDegradation::None => {}
+    }
+    out
+}
+
+fn peer_anchor_block(heading: &str, peer: &PeerAnchor) -> String {
+    let multiple = match peer.multiple_type {
+        MultipleType::Pe => "PE",
+        MultipleType::EvSales => "EV/Sales",
+    };
+    format!(
+        "\n\n== {heading} ==\n\
+         {multiple} 分位：p25 {}x / 中位 {}x / p75 {}x；样本公司（{}）。\n\
+         这些数字只描述同业分布；公司自身估值基数缺失时，不得据此反推目标价。\n",
+        peer.p25,
+        peer.median,
+        peer.p75,
+        peer.tickers.join("、")
+    )
 }
 
 /// 单公司「已核到的事实」块——`build_user_prompt` 与深度报告提示词（`report.rs`）共用同一份
@@ -171,12 +305,22 @@ pub(crate) fn facts_block(ctx: &AnswerContext) -> String {
     if let Some(hv) = &ctx.financials.historical_valuation {
         out.push_str("\n\n== 已核到的历史估值分位（近5年月度PE，仅美股）==\n");
         out.push_str(&format!("当前分位：{}\n", field(hv.percentile, "%")));
+        out.push_str(&format!("当前倍数：{}\n", field(hv.latest, "x")));
+        // p25/中位/p75 是估值「历史 PE 分位」法的锚点，必须逐个给出具体倍数：估值假设行里
+        // 会提到这三个分位，事实块若只给 min/max/median，模型想引用 p25/p75 时无数可依，
+        // 就会自己凑一个近似值（实测 GOOGL 中位 28.12x 被写成 28.17x，直接触发护栏硬失败）。
         out.push_str(&format!(
-            "历史区间：{} ~ {}（中位 {}）\n",
-            field(hv.min, "x"),
-            field(hv.max, "x"),
-            field(hv.median, "x")
+            "四分位：p25 {} / 中位 {} / p75 {}\n",
+            field(hv.p25, "x"),
+            field(hv.median, "x"),
+            field(hv.p75, "x")
         ));
+        out.push_str(&format!(
+            "历史区间：{} ~ {}\n",
+            field(hv.min, "x"),
+            field(hv.max, "x")
+        ));
+        out.push_str("引用上述任一倍数时必须原样照抄，不得四舍五入或换算。\n");
     }
 
     if !ctx.filings.is_empty() {
@@ -562,7 +706,7 @@ mod tests {
             price: Some(dec!(190)),
             ..Default::default()
         };
-        let long_answer = "壁".repeat(400);
+        let long_answer = "壁".repeat(900);
         let history = vec![PriorTurn {
             question: "护城河？".into(),
             answer: long_answer.clone(),
@@ -580,6 +724,73 @@ mod tests {
         });
         assert!(!prompt.contains(&long_answer));
         assert!(prompt.contains('…'));
+    }
+
+    /// 之前固定只带 3 轮：一次八轮的深聊里，前五轮用户说过的一切都不进提示词，
+    /// 模型于是把已经回答过的问题又问回来。现在按预算回看更多轮。
+    #[test]
+    fn history_keeps_more_than_three_turns_within_budget() {
+        let (panel, financials) = panel_with(Some(dec!(190)), false);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let history: Vec<PriorTurn> = (1..=6)
+            .map(|i| PriorTurn {
+                question: format!("第{i}问：这家公司怎么样？"),
+                answer: format!("第{i}答：结论摘要。"),
+            })
+            .collect();
+        let prompt = build_user_prompt(&AnswerContext {
+            question: "它的估值贵不贵？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &[],
+            evidence: &[],
+            depth: ResearchDepth::Standard,
+            history: &history,
+        });
+        for i in 1..=6 {
+            assert!(
+                prompt.contains(&format!("第{i}问")),
+                "第 {i} 轮应当仍在上下文里"
+            );
+        }
+        // 顺序必须是时间正序，否则模型理解的"上一轮"是最早那一轮。
+        let first = prompt.find("第1问").expect("第一轮");
+        let last = prompt.find("第6问").expect("最后一轮");
+        assert!(first < last, "历史必须按时间正序喂给模型");
+    }
+
+    /// 预算是硬约束：一堆长答案不能把提示词撑爆，超出就停止回看更早的轮次。
+    #[test]
+    fn history_stops_at_the_character_budget() {
+        let (panel, financials) = panel_with(Some(dec!(190)), false);
+        let market = MarketSnapshot {
+            price: Some(dec!(190)),
+            ..Default::default()
+        };
+        let history: Vec<PriorTurn> = (1..=8)
+            .map(|i| PriorTurn {
+                question: format!("第{i}问"),
+                answer: "壁".repeat(800),
+            })
+            .collect();
+        let prompt = build_user_prompt(&AnswerContext {
+            question: "它的估值贵不贵？",
+            name_zh: Some("苹果"),
+            panel: &panel,
+            market: &market,
+            financials: &financials,
+            filings: &[],
+            evidence: &[],
+            depth: ResearchDepth::Standard,
+            history: &history,
+        });
+        assert!(prompt.contains("第8问"), "最近一轮必须保留");
+        assert!(!prompt.contains("第1问"), "超出预算的早期轮次应当被丢弃");
     }
 
     #[test]

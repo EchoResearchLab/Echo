@@ -24,6 +24,9 @@ gloo-net = { version = "0.6", features = ["http"] }
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
+    # 外观偏好持久化（localStorage）与写 <html data-theme>。
+    "Storage",
+    "Element",
     "History",
     "Location",
     "Window",
@@ -35,6 +38,13 @@ web-sys = { version = "0.3", features = [
     "BlobPropertyBag",
     "Url",
     "HtmlAnchorElement",
+    # 答案复制（navigator.clipboard）与编辑器自增高（textarea.style / scrollHeight）。
+    "Navigator",
+    "Clipboard",
+    "Element",
+    "HtmlElement",
+    "HtmlTextAreaElement",
+    "CssStyleDeclaration",
 ] }
 
 [package.metadata.echo]

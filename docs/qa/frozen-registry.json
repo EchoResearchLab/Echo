@@ -1,0 +1,21 @@
+{
+  "_note": "冻结豁免登记表。cargo xtask frozen 用它判定：活表没有任何 Rust 读写、或 API 路由没有前端调用方时，必须在这里写清为什么允许，以及去向（接回 / 退役）。理由不得为空。登记了却其实已经接线的条目同样判失败——这张表只许缩短，不许当永久赦免书。所有条目登记于 2026-07-28 的冻结审查。",
+  "tables": {
+    "audit_log": "P5 团队审计表（迁移 0009）。当前是单租户 owner + member 形态，没有需要事后追责的多人协作动作，写入方尚未设计。去向：团队协作功能真正开做时接回，否则连同 teams/team_memberships 一起出退役 ADR 并 drop。",
+    "canary_runs": "供应商 canary 结果表。PLAN《生产闭环待办》的『Agentic 补救 canary』还停在离线循环与解析测试，真实供应商探针没跑起来，所以没有写入方。去向：canary 进预生产时它就是唯一结果底账，此条目届时必须删除。",
+    "data_source_fields": "数据源字段级授权元数据（迁移 0009）。红线 6 的商用授权目前由 echo-data/router.rs 的 AdapterDescriptor 在代码里静态描述，还没有下沉到库。去向：接入首个需要按字段区分商用授权的数据源时迁进来，在那之前保持代码内单一事实源，不要两处各写一半。",
+    "documents": "用户上传文档的研究附件表。产品当前只做公开一手数据（财报/公告/网页证据），没有上传入口。去向：做附件研究时接回，否则出退役 ADR。",
+    "hk_filing_ingest_log": "港股公告抓取的每 ticker 结果日志。港股一手管道现在由 cargo xtask hk-discover / hk-ingest 手工驱动，日志直接打在终端。去向：这条管道转成 worker 定时作业时接回——那时没有落库的日志就等于抓取状态不可见。",
+    "portfolio_snapshot_totals": "组合快照的分币种市值明细。现有 portfolio_snapshots 只存已折算成 USD 的合计，多币种明细还没有产品面。去向：做港元/美元分币种视图时接回。",
+    "research_facts": "迁移 0008 的 P4 研究记忆表。同一职责已由 company_profiles 的自动段 + research_memory.rs 承担（遮蔽数字后的定性线索回放），这张表是它的前身。去向：出退役 ADR 后 drop，别让两套研究记忆并存。",
+    "research_questions": "迁移 0008 的 P4 待答问题队列。缺口驱动编排（research_orchestrator）已经在内存里做同一件事——评估缺口、决定换源，不落库。去向：需要跨会话追踪未决问题时接回，否则随 research_facts 一起退役。",
+    "research_snapshots": "按天存一次研究结论（论点/估值三档/证伪条件）的快照表。研究会话本身已存在 research_sessions，这张表要回答的是『三个月前我对它的判断是什么』。去向：做研究结论时间线时接回——这是 PLAN《后续增强》里报告导出与画像编辑的相邻能力。",
+    "review_dates": "迁移 0008 的复盘日程表。当前复盘提醒（ReviewReminder 作业）按 company_profiles.updated_at 推算周期，不读这张表。去向：允许用户自定复盘日期时接回。"
+  },
+  "routes": {
+    "/api/ask": "非流式研究的 REST 契约。前端一律走 SSE 的 /api/ask/stream（过程可见 + 可取消），这条留给脚本、集成测试与未来的第三方调用方，两者共用同一个 ResearchService::ask。保留，不接前端。",
+    "/api/compare": "双主体对比的 REST 契约。对话内的对比由 /api/ask/stream 识别对比意图后走 compare_stream 完成，前端不需要单独调它。同上：保留作为契约，不接前端。",
+    "/api/companies/resolve": "公司解析（DB→别名→FMP 搜索→探活→LLM）的调试与集成入口。研究链路内部直接用应用层的 CompanyResolveService，不经过 HTTP。保留作为可观测的解析口径核对入口。",
+    "/api/companies/verify": "解析结果的探活校验入口，与 /api/companies/resolve 同一用途、同一理由。保留。"
+  }
+}

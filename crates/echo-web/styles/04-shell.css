@@ -1,0 +1,604 @@
+/* ============================================================================
+   Echo Research · 应用外壳
+   一条顶栏承载品牌 / 主导航 / 通知 / 账户；下面是唯一的内容舞台。
+   页面各自决定内部列结构，外壳不再预留任何空列。
+   ========================================================================= */
+
+.app-shell {
+  display: grid;
+  /* 显式钉住列宽：隐式列会按 max-content 撑开，让内部宽内容把整个外壳顶出视口，
+     在窄屏上表现为一条横向滚动条。 */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr);
+  height: 100dvh;
+  overflow: hidden;
+  background: transparent;
+}
+
+/* ── 顶栏：毛玻璃 ───────────────────────────────────────────────────── */
+.echo-topbar {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-7);
+  padding: 0 var(--gutter);
+  border-bottom: 1px solid var(--glass-line);
+  background: var(--glass);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-sheen), 0 8px 30px -26px rgba(23, 70, 120, 0.42);
+}
+
+/* ── 品牌 ───────────────────────────────────────────────────────────── */
+.topbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: none;
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) 0;
+  border-radius: var(--r-sm);
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+.topbar-brand:hover {
+  opacity: 0.76;
+}
+
+.echo-brand-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+}
+
+.echo-mark-svg {
+  width: 100%;
+  height: 100%;
+}
+
+.echo-brand-copy {
+  display: grid;
+  gap: 1px;
+  text-align: left;
+}
+
+.echo-brand-name {
+  color: var(--ink-1);
+  font-size: var(--fs-15);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  line-height: 1;
+}
+
+.echo-brand-sub {
+  color: var(--ink-4);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  line-height: 1;
+}
+
+/* ── 主导航：分段控件 ───────────────────────────────────────────────
+   原来是文字 + 底部指示线，三个 tab 各自撑开、下划线长度不一，在毛玻璃顶栏里
+   显得散。改成一枚整体的分段控件：轨道是浅色凹槽，选中项是升起的白色滑块——
+   一个可辨识的整体，而不是三段互不相干的文字。 */
+.workspace-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  margin-left: var(--sp-6);
+  padding: 4px;
+  overflow-x: auto;
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-full);
+  background: var(--glass-track);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
+  scrollbar-width: none;
+}
+
+.workspace-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.nav-item {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 var(--sp-5);
+  color: var(--ink-3);
+  font-size: var(--fs-13);
+  font-weight: 550;
+  white-space: nowrap;
+  border-radius: var(--r-full);
+  transition:
+    color var(--dur-1) var(--ease-out),
+    background-color var(--dur-2) var(--ease-out),
+    box-shadow var(--dur-2) var(--ease-out);
+}
+
+.nav-item:hover:not(.is-active) {
+  color: var(--ink-1);
+}
+
+.nav-item.is-active {
+  color: var(--brand-ink);
+  font-weight: 600;
+  background: var(--glass-thumb);
+  box-shadow: var(--glass-thumb-shadow), var(--glass-sheen);
+}
+
+/* ── 顶栏右侧 ───────────────────────────────────────────────────────── */
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+/* ── 通知 ───────────────────────────────────────────────────────────── */
+.notification-center {
+  position: relative;
+}
+
+.notification-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--ctl-md);
+  height: var(--ctl-md);
+  color: var(--ink-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-full);
+  transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
+}
+
+.notification-button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.notification-button:hover {
+  color: var(--ink-1);
+  border-color: var(--line-1);
+  background: var(--glass-hover);
+}
+
+.notification-button > span {
+  position: absolute;
+  top: 4px;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  color: var(--ink-on-brand);
+  font-size: 10px;
+  font-weight: 700;
+  border: 2px solid var(--paper-raised);
+  border-radius: var(--r-full);
+  background: var(--danger);
+}
+
+.notification-popover,
+.account-menu {
+  position: absolute;
+  top: calc(100% + var(--sp-2));
+  right: 0;
+  z-index: 60;
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-lg);
+  background: var(--glass-strong);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--e-pop), var(--glass-sheen);
+  transform-origin: top right;
+  animation: popoverIn var(--dur-3) var(--ease-out) both;
+}
+
+@keyframes popoverIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.notification-popover {
+  width: min(360px, calc(100vw - 2 * var(--gutter)));
+  max-height: 60vh;
+  padding: var(--sp-2) var(--sp-5) var(--sp-4);
+  overflow-y: auto;
+}
+
+.popover-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-4) 0 var(--sp-3);
+  border-bottom: 1px solid var(--glass-line);
+  background: transparent;
+}
+
+.popover-head strong {
+  font-size: var(--fs-15);
+}
+
+.popover-head button {
+  color: var(--brand-ink);
+  font-size: var(--fs-13);
+  font-weight: 550;
+}
+
+.popover-head button:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.notification-popover .page-state {
+  margin-top: var(--sp-4);
+}
+
+/* ── 账户 ───────────────────────────────────────────────────────────── */
+.rail-account {
+  position: relative;
+}
+
+.account-card {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: 42px;
+  padding: 0 var(--sp-3) 0 var(--sp-1);
+  border: 1px solid transparent;
+  border-radius: var(--r-full);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+
+.account-card:hover,
+.account-card.is-open {
+  border-color: var(--line-1);
+  background: var(--glass-hover);
+  box-shadow: var(--e-1);
+}
+
+.user-avatar {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  color: var(--brand-800);
+  font-size: var(--fs-12);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border-radius: var(--r-full);
+  background: linear-gradient(145deg, var(--brand-050), var(--brand-100));
+  box-shadow: inset 0 0 0 1px var(--brand-tint);
+}
+
+.user-avatar::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  height: 8px;
+  content: "";
+  /* 描边用页面纸面色而不是白：深色下白圈会在近黑顶栏上变成一枚亮点。 */
+  border: 2px solid var(--paper-raised);
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.account-copy {
+  display: grid;
+  gap: 1px;
+  text-align: left;
+}
+
+.account-copy strong {
+  max-width: 15ch;
+  overflow: hidden;
+  color: var(--ink-1);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-copy small {
+  max-width: 17ch;
+  overflow: hidden;
+  color: var(--ink-4);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-chevron {
+  color: var(--ink-4);
+  font-size: var(--fs-12);
+  line-height: 0.6;
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.account-card.is-open .account-chevron {
+  transform: rotate(180deg);
+}
+
+.account-menu {
+  display: grid;
+  width: min(340px, calc(100vw - 2 * var(--gutter)));
+  padding: var(--sp-2);
+}
+
+.account-menu-profile {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--line-1);
+}
+
+.account-menu-profile .user-avatar {
+  width: 44px;
+  height: 44px;
+  font-size: var(--fs-14);
+  box-shadow:
+    inset 0 0 0 1px var(--brand-tint),
+    var(--e-2);
+}
+
+.account-menu-profile > span:last-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.account-menu-profile strong {
+  overflow: hidden;
+  color: var(--ink-1);
+  font-size: var(--fs-14);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-menu-profile small {
+  overflow: hidden;
+  color: var(--ink-4);
+  font-size: var(--fs-12);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-subscription {
+  display: grid;
+  gap: var(--sp-2);
+  margin: var(--sp-2);
+  padding: var(--sp-4);
+  overflow: hidden;
+  border: 1px solid var(--brand-tint-strong);
+  border-radius: var(--r-md);
+  /* 底面用品牌色阶叠在纸面上：深色下 --brand-050/100 已翻成低透明度蓝，
+     同一份声明两套皮都成立，不需要深色分支。 */
+  background:
+    radial-gradient(160px 90px at 100% 0%, var(--brand-tint-strong), transparent 70%),
+    linear-gradient(145deg, var(--brand-050), var(--paper-raised));
+  box-shadow: var(--glass-sheen);
+}
+
+.subscription-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.subscription-heading > span {
+  color: var(--ink-4);
+  font-size: var(--fs-11);
+  font-weight: 550;
+}
+
+.account-subscription > strong {
+  color: var(--ink-1);
+  font-size: var(--fs-18);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.account-subscription > p {
+  color: var(--ink-3);
+  font-size: var(--fs-11);
+  line-height: var(--lh-snug);
+}
+
+.subscription-status {
+  padding: 3px 7px;
+  color: var(--brand-ink);
+  font-size: 10px;
+  font-weight: 650;
+  border-radius: var(--r-full);
+  background: var(--brand-tint-strong);
+}
+
+.subscription-status.is-active {
+  color: var(--ok);
+  background: var(--ok-tint);
+}
+
+.subscription-features {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+}
+
+.subscription-features span {
+  padding: 4px 7px;
+  color: var(--brand-ink);
+  font-size: 10px;
+  font-weight: 550;
+  border: 1px solid var(--brand-tint);
+  border-radius: var(--r-full);
+  background: var(--glass-hover);
+}
+
+.account-menu-actions {
+  display: grid;
+  gap: 2px;
+  padding-top: var(--sp-2);
+}
+
+.account-menu-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  min-height: 42px;
+  padding: 0 var(--sp-3);
+  color: var(--ink-2);
+  font-size: var(--fs-14);
+  text-align: left;
+  border-radius: var(--r-sm);
+  transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
+}
+
+.account-menu-actions button b {
+  color: var(--ink-4);
+  font-size: var(--fs-13);
+  font-weight: 500;
+}
+
+.account-menu-actions button:hover {
+  color: var(--ink-1);
+  background: var(--paper-sunken);
+}
+
+.account-menu-actions button.is-danger {
+  color: var(--danger-ink);
+}
+
+.account-menu-actions button.is-danger:hover {
+  background: var(--danger-tint);
+}
+
+.account-menu-actions button:disabled {
+  color: var(--ink-4);
+  background: transparent;
+}
+
+.account-menu-error {
+  margin: var(--sp-2) var(--sp-3) var(--sp-1);
+  color: var(--danger-ink);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
+}
+
+/* 菜单/浮层的点击外部关闭遮罩：透明、铺满、位于浮层之下。 */
+.dismiss-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+
+/* ── 内容舞台 ───────────────────────────────────────────────────────── */
+/* 舞台承载两种形态的页面，行数不同，必须分开定义——固定成单行时，
+   「页头 + 内容」这种两个兄弟元素的页面（资料库、设置）会被塞进同一格里
+   叠印：页面大标题被下面的分段控件压掉一半，浅色深色都一样。 */
+.workspace-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: min-content;
+  align-content: start;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* 滚动条出现/消失时不把整页内容左右挤一下。 */
+  scrollbar-gutter: stable;
+}
+
+/* 研究台是唯一的单子元素页面，它要吃满可用高度（对话流自己内部滚动）。 */
+.workspace-stage:has(> :only-child) {
+  grid-auto-rows: minmax(0, 1fr);
+  align-content: stretch;
+}
+
+/* 页面切换：透明度 + 一点点上移。
+   原来只有 140ms 纯淡入——太快且完全没有方向感，读起来是"内容闪了一下"而不是
+   "换了一页"。6px 的上移给出方向，dur-3 给眼睛跟上的时间；主舞台本身仍然
+   绝不缩放，缩放会让整页字重新光栅化，糊一帧比不动更廉价。 */
+/* fill-mode 用 backwards 而不是 both。both 会把 `to` 的 transform 永久留在元素上
+   （即使值是 none，计算值也停在单位矩阵），于是舞台永远是一个 transform containing
+   block——它内部所有 position: fixed 就不再相对视口，而是相对舞台。窄屏的历史抽屉
+   因此整体下坠 52px，顶栏与抽屉之间露出一条谁也没遮住的缝。
+   这里的 `to` 本来就等于元素的静止态，不需要 forwards 去保持；改成 backwards 只留
+   进场前的那一帧，动画一结束 transform 就彻底消失，视觉完全不变。 */
+.workspace-stage > * {
+  min-width: 0;
+  min-height: 0;
+  animation: stageEnter var(--dur-3) var(--ease-out) backwards;
+}
+
+@keyframes stageEnter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 资料库/设置是「页头 + 内容」两个兄弟，逐个进场会让副标题追着标题跑。
+   给内容一点延迟，让页头先落位——两段而不是两次。 */
+.workspace-stage > .page-header + .page-content {
+  animation-delay: 60ms;
+}
+
+.page-content {
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--sp-8) var(--gutter) var(--sp-11);
+}
+
+.page-header {
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--sp-9) var(--gutter) 0;
+}
+
+.page-header h1 {
+  font-family: var(--font-serif);
+  font-size: var(--fs-30);
+  font-weight: 500;
+}
+
+.page-header > p:last-child {
+  max-width: 60ch;
+  margin-top: var(--sp-3);
+  color: var(--ink-3);
+  font-size: var(--fs-15);
+}
+
+.page-header + .page-content {
+  padding-top: var(--sp-7);
+}

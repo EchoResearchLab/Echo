@@ -7,6 +7,8 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
+mod frozen;
+
 type TaskResult<T = ()> = Result<T, String>;
 
 fn workspace_root() -> TaskResult<PathBuf> {
@@ -52,6 +54,9 @@ where
 }
 
 fn rust_checks(root: &Path) -> TaskResult {
+    // 冻结检查排在最前：它不编译任何东西，几毫秒就能拦住"建了表没人调"这类
+    // 编译器永远不会抱怨、但会一路带进生产的缺陷。
+    frozen::check(root)?;
     run("cargo", ["fmt", "--all", "--", "--check"], root)?;
     run(
         "cargo",
@@ -190,7 +195,7 @@ fn discover_hk_announcements(ticker: &str) -> TaskResult {
 
 fn usage() {
     eprintln!(
-        "用法: cargo xtask <命令>\n\n  check              Rust fmt + clippy + test + Leptos/WASM release build\n  web                构建开发版 Leptos/WASM\n  e2e                通过 WebDriver 验收真实浏览器核心流程\n  migrate            对显式 DATABASE_URL 执行 Rust 迁移\n  bootstrap-owner    用显式环境变量创建首个 owner（不覆盖已有 owner）\n  hk-discover <代码> 从 HKEX 披露易发现最近业绩公告\n  hk-ingest <json>   校验并写入一份结构化 HKEX 业绩公告\n  release            执行完整 Rust 检查并构建 release Web"
+        "用法: cargo xtask <命令>\n\n  check              冻结检查 + Rust fmt + clippy + test + Leptos/WASM release build\n  frozen             只跑冻结检查：活表无 Rust 读写、API 路由无前端调用方\n  web                构建开发版 Leptos/WASM\n  e2e                通过 WebDriver 验收真实浏览器核心流程\n  migrate            对显式 DATABASE_URL 执行 Rust 迁移\n  bootstrap-owner    用显式环境变量创建首个 owner（不覆盖已有 owner）\n  hk-discover <代码> 从 HKEX 披露易发现最近业绩公告\n  hk-ingest <json>   校验并写入一份结构化 HKEX 业绩公告\n  release            执行完整 Rust 检查并构建 release Web"
     );
 }
 
@@ -205,6 +210,7 @@ fn main() -> ExitCode {
     let command = env::args().nth(1);
     let result = match command.as_deref() {
         Some("check") | Some("release") => rust_checks(&root).and_then(|()| web_build(&root, true)),
+        Some("frozen") => frozen::check(&root),
         Some("web") => web_build(&root, false),
         Some("e2e") => browser_e2e(&root),
         Some("migrate") => migrate_database(),

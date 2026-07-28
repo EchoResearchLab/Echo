@@ -1,0 +1,408 @@
+/* ============================================================================
+   Echo Research · 资料库（自选与监控 / 持仓 / 研究档案）
+   ========================================================================= */
+
+.library-page-content {
+  display: grid;
+  gap: var(--sp-6);
+}
+
+.library-section {
+  display: grid;
+  gap: var(--sp-6);
+}
+
+/* ── 分段控件 ───────────────────────────────────────────────────────── */
+.segmented {
+  position: relative;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(112px, auto);
+  gap: var(--sp-1);
+  justify-self: start;
+  padding: 3px;
+  border-radius: var(--r-md);
+  background: var(--paper-sunken);
+}
+
+.segmented-item {
+  position: relative;
+  z-index: 1;
+  min-height: var(--ctl-md);
+  padding: 0 var(--sp-4);
+  color: var(--ink-3);
+  font-size: var(--fs-14);
+  font-weight: 550;
+  white-space: nowrap;
+  border-radius: var(--r-sm);
+  transition: color var(--dur-1) var(--ease-out);
+}
+
+.segmented-item:hover:not(.is-active) {
+  color: var(--ink-1);
+}
+
+.segmented-item.is-active {
+  color: var(--brand-ink);
+  font-weight: 600;
+}
+
+/* 滑块跟随选中项移动；只做位置过渡，不缩放、不弹跳。 */
+.segmented-indicator {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  z-index: 0;
+  border-radius: var(--r-sm);
+  background: var(--paper-raised);
+  box-shadow: var(--e-1);
+  transition:
+    left var(--dur-3) var(--ease-out),
+    width var(--dur-3) var(--ease-out);
+}
+
+.segmented-indicator.is-watch {
+  left: 3px;
+  width: calc((100% - 6px - 2 * var(--sp-1)) / 3);
+}
+
+.segmented-indicator.is-portfolio {
+  left: calc(3px + (100% - 6px - 2 * var(--sp-1)) / 3 + var(--sp-1));
+  width: calc((100% - 6px - 2 * var(--sp-1)) / 3);
+}
+
+.segmented-indicator.is-profiles {
+  left: calc(3px + 2 * ((100% - 6px - 2 * var(--sp-1)) / 3 + var(--sp-1)));
+  width: calc((100% - 6px - 2 * var(--sp-1)) / 3);
+}
+
+/* ── 自选与监控 ─────────────────────────────────────────────────────── */
+.watch-section {
+  display: grid;
+  gap: var(--sp-6);
+}
+
+.watchlist-form {
+  display: grid;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-5);
+}
+
+.watch-form-grid {
+  grid-template-columns: minmax(160px, 1fr) minmax(200px, 2fr) auto;
+}
+
+.rule-form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.portfolio-form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.form-submit {
+  align-self: end;
+}
+
+.watch-table {
+  --table-cols: minmax(0, 2.2fr) minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 1.4fr) auto;
+}
+
+.rules-table {
+  --table-cols: minmax(0, 1fr) minmax(0, 1.6fr) minmax(0, 1.2fr) minmax(0, 2.2fr) auto;
+}
+
+.watch-company {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.watch-company i {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  color: var(--brand-800);
+  font-size: var(--fs-12);
+  font-style: normal;
+  font-weight: 700;
+  border-radius: var(--r-full);
+  background: var(--brand-100);
+}
+
+.watch-company strong {
+  overflow: hidden;
+  font-size: var(--fs-14);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.watch-ticker {
+  color: var(--ink-2);
+  font-size: var(--fs-13);
+  font-weight: 550;
+}
+
+.watch-tags {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.watch-tags em,
+.watch-tags b {
+  padding: 1px var(--sp-2);
+  font-size: var(--fs-11);
+  font-style: normal;
+  font-weight: 550;
+  border-radius: var(--r-xs);
+}
+
+.watch-tags em {
+  color: var(--brand-800);
+  background: var(--brand-tint);
+}
+
+/* 孤儿规则标记：公司已移出自选、规则仍在跑。 */
+.rule-orphan {
+  display: inline-block;
+  margin-left: var(--sp-2);
+  padding: 1px var(--sp-2);
+  color: var(--warn);
+  font-size: var(--fs-11);
+  font-style: normal;
+  font-weight: 550;
+  white-space: nowrap;
+  border-radius: var(--r-xs);
+  background: var(--warn-tint);
+}
+
+.watch-tags b {
+  color: var(--ink-3);
+  background: var(--paper-sunken);
+}
+
+.watch-date,
+.rules-table span {
+  color: var(--ink-3);
+  font-size: var(--fs-13);
+  line-height: var(--lh-snug);
+}
+
+.watch-actions,
+.rules-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  justify-content: flex-end;
+}
+
+.watch-star {
+  display: grid;
+  place-items: center;
+  width: var(--ctl-sm);
+  height: var(--ctl-sm);
+  color: var(--ink-3);
+  border-radius: var(--r-xs);
+  transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
+}
+
+.watch-star svg {
+  width: 15px;
+  height: 15px;
+}
+
+.watch-star:hover {
+  color: var(--brand-ink);
+  background: var(--brand-050);
+}
+
+/* 破坏性动作用垃圾桶图标——不再用「更多」语义的 ⋮ 承担删除。 */
+.watch-more {
+  display: grid;
+  place-items: center;
+  width: var(--ctl-sm);
+  height: var(--ctl-sm);
+  padding: 0;
+}
+
+.watch-more svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* ── 近期触发 ───────────────────────────────────────────────────────── */
+.activity-section {
+  margin-top: var(--sp-6);
+  padding-top: var(--sp-5);
+  border-top: 1px solid var(--line-1);
+}
+
+.activity-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+
+.activity-head h3 {
+  font-size: var(--fs-15);
+}
+
+.activity-head span {
+  color: var(--ink-4);
+  font-size: var(--fs-12);
+}
+
+.activity-feed {
+  display: grid;
+}
+
+/* ── 研究档案 ───────────────────────────────────────────────────────── */
+.profiles-page {
+  gap: var(--sp-5);
+}
+
+.profile-create {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+.profile-create-copy {
+  align-self: end;
+  color: var(--ink-4);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
+}
+
+.profiles-layout {
+  display: grid;
+  grid-template-columns: 268px minmax(0, 1fr);
+  gap: var(--sp-6);
+  align-items: start;
+}
+
+.profiles-list {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding: var(--sp-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--paper-raised);
+}
+
+.profile-item {
+  border-radius: var(--r-sm);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+
+.profile-item:hover {
+  background: var(--paper-sunken);
+}
+
+.profile-item.is-active {
+  background: var(--brand-tint);
+}
+
+.profile-item.is-active .session-item-title {
+  color: var(--brand-800);
+}
+
+.profiles-editor {
+  min-width: 0;
+}
+
+.profile-form {
+  display: grid;
+  gap: var(--sp-7);
+}
+
+.profile-editor-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-4);
+}
+
+.profile-editor-head h2 {
+  font-size: var(--fs-21);
+}
+
+.profile-form-section {
+  display: grid;
+}
+
+.profile-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: var(--sp-4);
+}
+
+.profile-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--sp-4);
+}
+
+.profile-field-grid label,
+.profile-notes {
+  display: grid;
+  gap: var(--sp-2);
+  color: var(--ink-2);
+  font-size: var(--fs-13);
+  font-weight: 550;
+}
+
+.profile-field-grid textarea,
+.profile-notes textarea {
+  min-height: 108px;
+  font-weight: 400;
+}
+
+.profile-valuation-readout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--paper-canvas);
+}
+
+.profile-valuation-readout > div {
+  display: grid;
+  gap: 2px;
+}
+
+.profile-valuation-readout span {
+  color: var(--ink-4);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.profile-valuation-readout strong {
+  font-size: var(--fs-16);
+  font-variant-numeric: tabular-nums;
+}
+
+.profile-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding-top: var(--sp-5);
+  border-top: 1px solid var(--line-1);
+}
+
+.profile-actions > div:first-child {
+  flex: 1;
+  min-width: 0;
+}

@@ -9,7 +9,6 @@
 use echo_domain::{
     Company, Filing, Financials, MarketSnapshot, PeerAnchor, Valuation, display_valuation,
 };
-use rust_decimal::Decimal;
 
 pub mod answer_prompt;
 pub mod auth;
@@ -18,6 +17,8 @@ pub mod from_db;
 pub mod model_gateway;
 pub mod report;
 pub mod research;
+pub mod research_memory;
+pub mod research_orchestrator;
 pub mod watch_rules;
 
 pub use answer_prompt::{AnswerContext, build_system_prompt, build_user_prompt};
@@ -33,8 +34,14 @@ pub use model_gateway::{
 };
 pub use report::{ReportOutcome, ReportService};
 pub use research::{
-    CompareResearchFacts, LoadedFundamentals, PersistResearchSession, PriorTurn, ResearchFacts,
-    ResearchOutcome, ResearchPorts, ResearchService,
+    CompareResearchFacts, FactRecovery, FactRecoveryRequest, GuardAuditRecord, GuardOutcome,
+    LoadedFundamentals, PersistResearchSession, PriorTurn, ResearchFacts, ResearchOutcome,
+    ResearchPorts, ResearchService,
+};
+pub use research_memory::{CompanyMemory, CompanyMemoryUpdate};
+pub use research_orchestrator::{
+    DEFAULT_MAX_RECOVERY_ROUNDS, RecoveryRound, RecoveryTrace, ResearchDegradation, ResearchGap,
+    ResearchLoopConfig, ResearchOrchestrator, evaluate_gaps,
 };
 pub use watch_rules::{WatchRuleError, WatchRuleService};
 
@@ -98,14 +105,4 @@ pub fn build_panel(
         connected_sources: connected,
         data_completeness: completeness,
     }
-}
-
-/// 仓位盈亏用 Rust 定点内核算（红线 4：展示边界之外不得二进制浮点）。
-#[must_use]
-pub fn position_return_pct(price: Decimal, avg_cost: Decimal) -> Option<Decimal> {
-    use echo_finance_core::{Currency, Money, ratio, subtract};
-    let price = Money::new(price, Currency::Usd);
-    let cost = Money::new(avg_cost, Currency::Usd);
-    let gain = subtract(price, cost).ok()?;
-    ratio(gain, cost).ok().flatten()
 }
